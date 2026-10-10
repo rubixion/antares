@@ -640,7 +640,26 @@ const SYSTEMS = D.systems.map((r, i) => ({
     insol: p[8], year: p[9], method: D.methods[p[10]], facility: D.facilities[p[11]], flags: p[12],
     w: p[13], tper: p[14], tmid: p[15], incl: p[16] })),
 }))
+// Unconfirmed candidates, added by hand (not in the NASA archive). Both are the real signals Project Hail Mary used.
+// teq, insol and radius are rough estimates (flags 4|8).
+;(() => {
+  const cand = (name, a, per, e, r, msini, teq, insol, year) =>
+    ({ name, a, per, e, r, m: msini, msini: 1, teq, insol, year, method: 'Radial Velocity', facility: null, flags: 4 | 8, unconf: true })
+  SYSTEMS.find(sy => sy.host === 'tau Cet')?.planets.push(cand('tau Cet e (Adrian)', 0.538, 162.87, 0.18, 1.6, 3.93, 318, 1.7, 2017)) // Feng et al. 2017
+  const s = STARS.find(s => s.hip === 19849) // 40 Eri A (Keid): candidate 40 Eri b, Ma et al. 2018, later attributed to stellar activity
+  if (s && s.sys < 0) {
+    s.sys = SYSTEMS.length
+    SYSTEMS.push({ i: s.sys, host: '40 Eri', hip: s.hip, ra: s.ra, dec: s.dec, dist: s.dist, vmag: s.mag, spect: s.spect, teff: s.teff, rad: s.rad,
+      mass: 0.84, lum: s.lum, snum: s.mult, con: s.con, star: s.i, dir: s.dir,
+      planets: [cand('40 Eri b (Erid)', 0.224, 42.38, 0, 1.9, 8.47, 469, 8.1, 2018)] })
+  }
+})()
 const FAINT_HOSTS = SYSTEMS.filter(s => s.star < 0)
+// "2 planets confirmed", "1 planet unconfirmed", "3 planets confirmed + 1 unconfirmed"
+function confWord(ps) {
+  const u = ps.filter(p => p.unconf).length, c = ps.length - u
+  return c ? `${planetsWord(c)} confirmed${u ? ` + ${u} unconfirmed` : ''}` : `${planetsWord(u)} unconfirmed`
+}
 
 // Label anchor: mean of the figure, unless that lands outside the constellation (Serpens is in two parts)
 const ALPHA = new Int16Array(128).fill(-1)
@@ -1980,7 +1999,7 @@ function showStarPanel(s) {
   const n = sy?.planets.length ?? 0
   const estimated = !sy
   const multi = s.mult > 1
-  const note = n ? `${planetsWord(n)} confirmed${multi ? `<br>${multWord(s.mult).toLowerCase()}` : ''}`
+  const note = n ? `${confWord(sy.planets)}${multi ? `<br>${multWord(s.mult).toLowerCase()}` : ''}`
     : multi ? `No confirmed planets.<br>Shows the ${s.tree ? treeLeaves(s.tree).length : s.mult} stars.`
     : (settings.sim ? 'No confirmed planets.<br>Shows a simulated system.' : 'No confirmed planets.<br>Shows the star alone.')
   const L = sy?.lum ?? s.lum
@@ -2015,7 +2034,7 @@ function showHostPanel(sy) {
   setHeader('◎', hexc, prettyName(sy.host), sy.teff ? starClass(sy.spect, sy.teff) : 'Planet host')
   const ra = sy.ra, dec = sy.dec
   showPanel([
-    enterAction('ENTER SYSTEM →', `${planetsWord(sy.planets.length)} confirmed${sy.snum > 1 ? `<br>${sy.snum}-star system` : ''}`),
+    enterAction('ENTER SYSTEM →', `${confWord(sy.planets)}${sy.snum > 1 ? `<br>${sy.snum}-star system` : ''}`),
     colSection('Observed',
       kv('Constellation', esc(c.name), 'cyan') +
       kv('V magnitude', sy.vmag != null ? sy.vmag.toFixed(2) : '—') +
@@ -2110,13 +2129,14 @@ function showPlanetPanel(l) {
   const p = l.p
   const k = KIND[p.kind]
   const sym = p.sol ? { Mercury:'☿', Venus:'♀', Earth:'⊕', Mars:'♂', Jupiter:'♃', Saturn:'♄', Uranus:'⛢', Neptune:'♆' }[p.name] : (p.short && p.short.length <= 3 ? p.short : '●')
-  setHeader(sym, k.css, p.name, `${k.label} · ${p.sim ? 'Simulated' : p.sol ? 'Solar System' : 'Confirmed'}`)
+  setHeader(sym, k.css, p.name, `${k.label} · ${p.sim ? 'Simulated' : p.sol ? 'Solar System' : p.unconf ? 'Unconfirmed' : 'Confirmed'}`)
   const f = p.flags || 0
   const teqLbl = p.sol ? 'Mean temperature' : 'Equilibrium temp'
   const mLbl = p.msini ? 'Min. mass (M sin i)' : 'Mass'
   const tC = p.teq != null ? `${est(f & 8 || p.sim)}${fmtN(p.teq)} K · ${fmtN(p.teq - 273.15)} °C` : '—'
   showPanel([
     p.sim ? '<div class="ap-note">Simulated planet, not a real detection.</div>' : '',
+    p.unconf ? '<div class="ap-note">Unconfirmed. A proposed radial-velocity signal that is not in the NASA Exoplanet Archive confirmed list, shown because Project Hail Mary uses it. It may not exist.</div>' : '',
     colSection('Orbit',
       kv('Semi-major axis', `${est(f & 1 || p.sim)}${fmtSig(p.a, 3)} AU`) +
       kv('Period', `${est(f & 2 || p.sim)}${fmtPeriod(p.per)}`) +
@@ -2228,7 +2248,7 @@ function updateDrawer() {
     _hud = ''
     updateHud()
     const p = selPlanet?.prim ? null : selPlanet?.p
-    const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
+    const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : (p ? p.unconf : m.planets.length && m.planets.every(p => p.unconf)) ? `<span class="bd-badge polar">Unconfirmed</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
     if (p) {
       chem.innerHTML = badge + chemItem('Planet', esc(p.name)) + chemItem('Type', KIND[p.kind].label) +
         chemItem('Orbit', `${fmtSig(p.a, 3)} AU`) + chemItem('Period', fmtPeriod(p.per)) + (selPlanet.inHZ ? '<span class="bd-badge nonpolar">Habitable zone</span>' : '')
@@ -2488,6 +2508,8 @@ SYSTEMS.forEach(sy => {
 SYSTEMS.forEach(sy => sy.planets.forEach(p => {
   const e = { kind: 'planet', sy, p, label: prettyName(p.name) }
   hostKeys(p.name).forEach(k => addKey(k, e))
+  const nick = p.name.match(/\((\w+)\)$/)?.[1] // "40 Eri b (Erid)" is also found as "Erid"
+  if (nick) { addKey(norm(nick), e); hostKeys(p.name.replace(/ \(\w+\)$/, '')).forEach(k => addKey(k, e)) }
 }))
 
 ;(() => {
