@@ -519,13 +519,14 @@
     <div class="help-row"><span class="help-key">Enter</span><span class="help-desc">Fly into selected system</span></div>
     <div class="help-row"><span class="help-key">Esc</span><span class="help-desc">Close / back to the sky</span></div>
     <div class="help-row"><span class="help-key">R</span><span class="help-desc">Reset view</span></div>
+    <div class="help-row"><span class="help-key">T</span><span class="help-desc">Back to today's positions</span></div>
     <div class="help-row"><span class="help-key">/</span><span class="help-desc">Search</span></div>
     <div class="help-divider"></div>
     <div class="s-lbl" style="margin-bottom:6px">Find anything</div>
     <div class="help-hint">Type a constellation <em>Orion</em>, a star <em>Betelgeuse</em>, <em>alpha centauri</em>, <em>HIP 27989</em>, a planet host <em>TRAPPIST-1</em>, or a planet <em>Kepler-22 b</em>, then press Enter.</div>
     <div class="help-divider"></div>
     <div class="s-lbl" style="margin-bottom:6px">Data</div>
-    <div class="help-hint" id="data-credits">Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a>. Figures &amp; IAU boundaries: <a href="https://github.com/Stellarium/stellarium" target="_blank" rel="noopener">Stellarium</a>. Planets: <a href="https://exoplanetarchive.ipac.caltech.edu" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Multiple stars: <a href="https://vizier.cds.unistra.fr/viz-bin/VizieR?-source=J/MNRAS/389/869" target="_blank" rel="noopener">Eggleton &amp; Tokovinin 2008</a>. Values marked ~ are estimates.</div>
+    <div class="help-hint" id="data-credits">Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a>. Figures &amp; IAU boundaries: <a href="https://github.com/Stellarium/stellarium" target="_blank" rel="noopener">Stellarium</a>. Planets: <a href="https://exoplanetarchive.ipac.caltech.edu" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Multiple stars: <a href="https://vizier.cds.unistra.fr/viz-bin/VizieR?-source=J/MNRAS/389/869" target="_blank" rel="noopener">Eggleton &amp; Tokovinin 2008</a>. Binary orbits: <a href="https://crf.usno.navy.mil/data_products/WDS/orb6/orb6.html" target="_blank" rel="noopener">ORB6</a> and <a href="https://sb9.astro.ulb.ac.be" target="_blank" rel="noopener">SB9</a>. Solar System: <a href="https://ssd.jpl.nasa.gov/horizons/" target="_blank" rel="noopener">JPL Horizons</a>. Motion is Newtonian N-body gravity. Values marked ~ are estimates.</div>
   </div>
 
 </div>
@@ -636,7 +637,8 @@ const SYSTEMS = D.systems.map((r, i) => ({
   i, host: r[0], hip: r[1], ra: r[2], dec: r[3], dist: r[4], vmag: r[5], spect: r[6], teff: r[7], rad: r[8],
   mass: r[9], lum: r[10], snum: r[11], con: r[12], star: r[13], dir: dirOf(r[2], r[3]),
   planets: r[14].map(p => ({ name: p[0], a: p[1], per: p[2], e: p[3], r: p[4], m: p[5], msini: p[6], teq: p[7],
-    insol: p[8], year: p[9], method: D.methods[p[10]], facility: D.facilities[p[11]], flags: p[12] })),
+    insol: p[8], year: p[9], method: D.methods[p[10]], facility: D.facilities[p[11]], flags: p[12],
+    w: p[13], tper: p[14], tmid: p[15], incl: p[16] })),
 }))
 const FAINT_HOSTS = SYSTEMS.filter(s => s.star < 0)
 
@@ -939,7 +941,6 @@ sysGroup.visible = false
 scene.add(sysGroup)
 sysGroup.add(new THREE.HemisphereLight(0x9fb2ff, 0x121225, 0.6))
 const starLight = new THREE.PointLight(0xffffff, 3.2, 0, 0)
-sysGroup.add(starLight)
 
 function surfaceColor(teff, out) {
   const hsl = {}
@@ -975,7 +976,9 @@ const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), starSurface)
 const sunGlow = new THREE.Sprite(glowMat)
 const sunCorona = new THREE.Sprite(coronaMat)
 sunGlow.renderOrder = 5; sunCorona.renderOrder = 4
-sysGroup.add(sunMesh, sunGlow, sunCorona)
+const primaryGroup = new THREE.Group() // moves with the primary around the system's barycentre
+primaryGroup.add(sunMesh, sunGlow, sunCorona, starLight)
+sysGroup.add(primaryGroup)
 
 const orbitMat    = new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.26, depthWrite: false })
 const orbitSelMat = new THREE.LineBasicNodeMaterial({ color: 0xa9bdf5, transparent: true, opacity: 0.85, depthWrite: false })
@@ -1082,9 +1085,9 @@ function systemModel(ref) {
   const sy = ref.type === 'sys' ? ref.sys : (ref.star.sys >= 0 ? SYSTEMS[ref.star.sys] : null)
   const st = ref.type === 'star' ? ref.star : (sy.star >= 0 ? STARS[sy.star] : null)
   const teff = sy?.teff ?? st?.teff ?? 5772
-  const rad  = sy?.rad ?? st?.rad ?? null
+  const rad  = sy?.rad ?? (st?.tree ? primaryOf(st.tree)[4] : st?.rad) ?? null
   const lum  = sy?.lum ?? st?.lum ?? (rad ? rad * rad * Math.pow(teff / 5772, 4) : 1)
-  const mass = sy?.mass ?? clamp(Math.pow(lum, 1 / 3.5), 0.08, 40)
+  const mass = sy?.mass ?? (st?.tree ? primaryOf(st.tree)[3] : clamp(Math.pow(lum, 1 / 3.5), 0.08, 40))
   const title = st ? starTitle(st) : prettyName(sy.host)
   const model = {
     ref, key: st ? `hip/${st.hip}` : `host/${sy.host}`, title,
@@ -1133,169 +1136,433 @@ function simulatePlanets(st, L, M, Rsun) {
   return out
 }
 
-let sys = null // the live system: { model, planets: [{ p, mesh, orbit, label, ... }], scale, span, days, dps }
+let sys = null // the live system (see buildSystem)
 
 function disposeTree(o) {
-  o.traverse(c => { if (c.geometry && c.geometry !== quad) c.geometry.dispose() })
+  o.traverse(c => { if (c.geometry && c.geometry !== quad && !c.isSprite) c.geometry.dispose() }) // all Sprites share one geometry
+}
+
+// Gravity
+// Every system runs Newtonian gravity: a leapfrog (kick-drift-kick) N-body integration in AU, days and solar
+// masses, started from the measured orbits at today's date (the Solar System from JPL Horizons state vectors).
+// A triple is therefore a genuine three-body problem. Real triples look like nested ellipses because only
+// hierarchical ones survive; their mutual tugs are there, just small.
+const GK = 2.9591220828559093e-4 // G in AU^3 / (M_sun day^2)
+const M_EARTH = 3.0035e-6        // solar masses
+const jdNow = () => Date.now() / 86400000 + 2440587.5
+const TAU = Math.PI * 2
+
+function solveKepler(M, e) {
+  let E = e < 0.8 ? M : Math.PI
+  for (let k = 0; k < 30; k++) {
+    const d = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E))
+    E -= d
+    if (Math.abs(d) < 1e-12) break
+  }
+  return E
+}
+// In-plane vector to the sky frame (+Z toward Earth): Rz(O) Rx(i) Rz(w)
+function skyRot(o, x, y) {
+  const cw = Math.cos(o.w), sw = Math.sin(o.w), ci = Math.cos(o.i), si = Math.sin(o.i), cO = Math.cos(o.O), sO = Math.sin(o.O)
+  const x1 = cw * x - sw * y, y1 = sw * x + cw * y
+  const y2 = ci * y1
+  return [cO * x1 - sO * y2, sO * x1 + cO * y2, si * y1]
+}
+// Relative position and velocity of a two-body orbit at time t
+function orbitState(o, t) {
+  const n = TAU / o.P
+  const M = ((n * (t - o.tp)) % TAU + TAU) % TAU
+  const E = solveKepler(M, o.e)
+  const b = o.a * Math.sqrt(1 - o.e * o.e), cE = Math.cos(E), sE = Math.sin(E), den = 1 - o.e * cE
+  return [skyRot(o, o.a * (cE - o.e), b * sE), skyRot(o, -o.a * n * sE / den, b * n * cE / den)]
+}
+// Orbit from a period and masses; a follows from Kepler's third law so the dynamics stay consistent
+function makeOrbit(P, e, w, i, O, tp, mTot) {
+  e = clamp(e ?? 0, 0, 0.97)
+  return { P, e, w, i, O, tp, a: Math.cbrt(GK * mTot * P * P / (TAU * TAU)) }
+}
+// Periastron time from a conjunction (transit) time: the body is then on the +Z side, at f = 90° − w
+function tpFromConjunction(tc, P, e, w) {
+  const f = Math.PI / 2 - w
+  const E = 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(f / 2))
+  return tc - (E - e * Math.sin(E)) * P / TAU
+}
+// Osculating ellipse of a relative state, for drawing the path
+function rvToOrbit(r, v, mu) {
+  const R = new THREE.Vector3(...r), V = new THREE.Vector3(...v)
+  const h = R.clone().cross(V)
+  const ev = V.clone().cross(h).divideScalar(mu).sub(R.clone().normalize())
+  const e = Math.min(ev.length(), 0.97)
+  const a = 1 / (2 / R.length() - V.lengthSq() / mu)
+  const p = ev.length() > 1e-9 ? ev.normalize() : R.clone().normalize() // periapsis direction
+  const q = h.clone().normalize().cross(p)                                 // 90° ahead in the plane
+  return { a: a > 0 ? a : R.length(), e, p, q }
+}
+
+function accel(bs) {
+  for (const b of bs) b.ax = b.ay = b.az = 0
+  for (let i = 0; i < bs.length; i++) {
+    const p = bs[i]
+    for (let j = i + 1; j < bs.length; j++) {
+      const q = bs[j]
+      const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z
+      const r2 = dx * dx + dy * dy + dz * dz, inv = GK / (r2 * Math.sqrt(r2))
+      p.ax += q.m * dx * inv; p.ay += q.m * dy * inv; p.az += q.m * dz * inv
+      q.ax -= p.m * dx * inv; q.ay -= p.m * dy * inv; q.az -= p.m * dz * inv
+    }
+  }
+}
+// 4th-order symplectic integrator (Yoshida 1990): three leapfrog substeps per step. Energy stays bounded
+// like plain leapfrog, but the phase error falls as h^4, so orbits keep time over many periods.
+const YOSHIDA = (() => { const w1 = 1 / (2 - Math.cbrt(2)); return [w1, 1 - 2 * w1, w1] })()
+function leapfrog(bs, h, n) {
+  for (let k = 0; k < n; k++) {
+    for (const c of YOSHIDA) {
+      const s = h * c
+      for (const b of bs) { b.vx += b.ax * s / 2; b.vy += b.ay * s / 2; b.vz += b.az * s / 2; b.x += b.vx * s; b.y += b.vy * s; b.z += b.vz * s }
+      accel(bs)
+      for (const b of bs) { b.vx += b.ax * s / 2; b.vy += b.ay * s / 2; b.vz += b.az * s / 2 }
+    }
+  }
+}
+const newBody = m => ({ m, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ax: 0, ay: 0, az: 0 })
+const setBody = (b, r, v) => { [b.x, b.y, b.z] = r; [b.vx, b.vy, b.vz] = v }
+const add3 = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]
+
+// Which plane is drawn flat: a transiting planet's orbit plane, else a measured visual orbit, else assumed
+function referenceOrientation(model) {
+  if (model.sol) return { i: 0, O: 0, known: false, src: 'ecliptic' }
+  const tp = model.planets.find(p => p.incl != null)
+  if (tp) return { i: tp.incl * DEG, O: 0, known: true, src: `orbit of ${tp.short ?? tp.name}` }
+  let best = null
+  for (const n of treePairs(model.tree)) if (n[9] != null && n[10] != null && (!best || (n[4] ?? 0) > (best[4] ?? 0))) best = n
+  if (best) return { i: best[9] * DEG, O: best[10] * DEG, known: true, src: 'measured binary orbit' }
+  return { i: 60 * DEG, O: 0, known: false, src: 'assumed' }
+}
+function treePairs(n, out = []) {
+  if (n && n[0] === 'N') { out.push(n); treePairs(n[1], out); treePairs(n[2], out) }
+  return out
+}
+
+function starVisual(teff, R, unseen) {
+  const rsOf = r => clamp(0.8 + 0.28 * Math.log10(r || 1), 0.3, 1.8)
+  const r = rsOf(R) * (unseen ? 0.6 : 1)
+  const uCol = uniform(unseen ? new THREE.Color(0x8a93a8) : surfaceColor(teff || 3600, new THREE.Color())) // unseen: a grey ghost
+  const surf = makeStarSurface(uCol); surf.userData.own = true
+  const glow = makeGlow(uCol); glow.userData.own = true
+  if (unseen) surf.colorNode = surf.colorNode.mul(0.55)
+  const obj = new THREE.Group()
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 24), surf)
+  const halo = new THREE.Sprite(glow); halo.scale.setScalar(r * (unseen ? 2.5 : 4.5)); halo.renderOrder = 5
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(r * 1.6, 0.4), 8, 6), hzMat)
+  hit.visible = false
+  obj.add(mesh, halo, hit)
+  return { obj, mesh, hit, r }
+}
+
+function makeLabel(text) {
+  const label = document.createElement('div')
+  label.className = 'lbl-planet'
+  label.textContent = text
+  labelsEl.appendChild(label)
+  planetLabels.push(label)
+  return label
 }
 
 function buildSystem(model) {
-  if (sys) for (const o of sys.objects) { sysGroup.remove(o); disposeTree(o); o.traverse(c => c.material?.userData?.own && c.material.dispose()) }
+  // primaryGroup is shared across systems: never remove or dispose it
+  if (sys) for (const o of sys.objects) if (o !== primaryGroup) { sysGroup.remove(o); disposeTree(o); o.traverse(c => c.material?.userData?.own && c.material.dispose()) }
   for (const el of planetLabels) el.remove()
   planetLabels.length = 0
 
   const st = model.star
-  const tint = starTint(st.teff)
   surfaceColor(st.teff, uStarColor.value)
-  starLight.color.copy(tint)
+  starLight.color.copy(starTint(st.teff))
   const rs = clamp(0.8 + 0.28 * Math.log10(st.rad || 1), 0.45, 1.8)
   sunMesh.scale.setScalar(rs)
   sunGlow.scale.setScalar(rs * 4.5)
   sunCorona.scale.setScalar(rs * 10)
 
-  const ps = [...model.planets].sort((a, b) => a.a - b.a)
-  const [hzIn, hzOut] = hzOf(st.lum)
-  const tree = model.tree
-  const compA = []
-  for (let n = tree; n && n[0] === 'N'; n = n[1]) compA.push(n[4] ?? 1) // pairs anchored on the primary
-  const knots = [...ps.map(p => p.a), ...compA].sort((a, b) => a - b)
-  const scale = makeScale(knots.length ? knots : [Math.sqrt(st.lum)], rs)
-  const objects = []
   const rng = mulberry32(model.key.length * 7919 + (model.planets[0]?.a ?? 1) * 1e6)
+  const ref = referenceOrientation(model)
+  const nRef = new THREE.Vector3(Math.sin(ref.O) * Math.sin(ref.i), -Math.cos(ref.O) * Math.sin(ref.i), Math.cos(ref.i))
+  const qSky = new THREE.Quaternion().setFromUnitVectors(nRef, new THREE.Vector3(0, 1, 0)) // sky frame -> display
+  const tree = model.tree && model.tree[0] === 'N' ? model.tree : null
+  const objects = [primaryGroup]
+  const bodies = []
 
-  // habitable zone
+  // Display scale: piecewise log, shared by the primary's planets and the pairs it anchors
+  const ps = [...model.planets].sort((a, b) => a.a - b.a)
+  const chainA = []
+  for (let n = tree; n && n[0] === 'N'; n = n[1]) chainA.push(n[4] ?? 1)
+  const knots = [...ps.map(p => p.a), ...chainA].sort((a, b) => a - b)
+  const scale = makeScale(knots.length ? knots : [Math.sqrt(st.lum)], rs)
+  const [hzIn, hzOut] = hzOf(st.lum)
+
+  // Primary star, its planets and the habitable zone travel together
+  const planetGroup = new THREE.Group()
+  objects.push(planetGroup)
   const r1 = scale(hzIn), r2 = scale(hzOut)
   if (r2 - r1 > 0.02) {
     const hz = new THREE.Mesh(new THREE.RingGeometry(r1, r2, 160, 1), hzMat)
     hz.rotation.x = -Math.PI / 2
     hz.renderOrder = 1
     // closed Line rather than LineLoop, which the WebGPU renderer does not support
-    const edge = (r) => new THREE.Line(new THREE.BufferGeometry().setFromPoints(
-      Array.from({ length: 161 }, (_, k) => new THREE.Vector3(Math.cos(k / 160 * Math.PI * 2) * r, 0, Math.sin(k / 160 * Math.PI * 2) * r))), hzEdgeMat)
-    objects.push(hz, edge(r1), edge(r2))
+    const edge = r => new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: 161 }, (_, k) => new THREE.Vector3(Math.cos(k / 160 * TAU) * r, 0, Math.sin(k / 160 * TAU) * r))), hzEdgeMat)
+    planetGroup.add(hz, edge(r1), edge(r2))
   }
+  const primaryMass = st.mass
+  const primary = { kind: 'star', mass: primaryMass, body: newBody(primaryMass), obj: primaryGroup, planets: [], primary: true }
+  bodies.push(primary.body)
 
   const live = ps.map((p, i) => {
     const pr = clamp(0.07 + 0.085 * Math.sqrt(p.r ?? 3), 0.1, 0.42)
+    const mass = (p.m ?? 10) * M_EARTH
     const e = clamp(p.e ?? 0, 0, 0.95)
-    const omega = rng() * Math.PI * 2
-    const M0 = rng() * Math.PI * 2
+    const w = (p.w ?? (p.tmid != null ? 90 : rng() * 360)) * DEG
+    const inc = p.incl != null ? p.incl * DEG : ref.i
+    const phase = p.tmid != null ? 'transit' : p.tper != null ? 'periastron' : null
+    const orbit = makeOrbit(p.per, e, w, inc, ref.O, 0, primaryMass + mass)
+    orbit.tp = p.tmid != null ? tpFromConjunction(p.tmid, p.per, orbit.e, w) : p.tper ?? (jdNow() - rng() * p.per)
     const mat = planetMaterial(p, p.seed + i * 0.37)
     mat.userData.own = true
-    const obj = new THREE.Group()                     // positioned on the orbit
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 48, 24), mat) // spins inside it
+    const obj = new THREE.Group()
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 48, 24), mat)
     mesh.rotation.z = (rng() - 0.5) * 0.5
     obj.add(mesh)
     if (p.ring) obj.add(saturnRing(pr))
     const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(pr * 2, 0.38), 8, 6), hzMat)
     hit.visible = false
     obj.add(hit)
-    const pts = []
-    for (let k = 0; k <= 256; k++) {
-      const nu = k / 256 * Math.PI * 2
-      const rr = scale(p.a * (1 - e * e) / (1 + e * Math.cos(nu)))
-      pts.push(new THREE.Vector3(Math.cos(nu + omega) * rr, 0, -Math.sin(nu + omega) * rr))
-    }
-    const orbit = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), orbitMat)
-    orbit.renderOrder = 1
-    objects.push(obj, orbit)
-    const label = document.createElement('div')
-    label.className = 'lbl-planet'
-    label.textContent = p.name
-    labelsEl.appendChild(label)
-    planetLabels.push(label)
-    const inHZ = p.a >= hzIn && p.a <= hzOut
-    return { p, pr, e, omega, M0, obj, mesh, hit, orbit, el: label, label, inHZ, shown: null }
+    objects.push(obj)
+    const body = newBody(mass)
+    bodies.push(body)
+    const label = makeLabel(p.name)
+    const l = { p, pr, e, orbitEl: orbit, obj, mesh, hit, orbit: null, el: label, label, inHZ: p.a >= hzIn && p.a <= hzOut,
+      shown: null, body, host: primary, phase: model.sol ? 'jpl' : phase, oriented: model.sol || p.incl != null }
+    primary.planets.push(l)
+    return l
   })
-  // Companion stars: relative orbits, each pair's fainter side circling its brighter side's primary.
-  // Pairs on the primary share the planets' scale; pairs inside a companion get a compact local one.
-  const comps = []
-  if (tree && tree[0] === 'N') {
-    const root = new THREE.Group()
-    objects.push(root)
-    const rsOf = R => clamp(0.8 + 0.28 * Math.log10(R || 1), 0.3, 1.8)
-    const walk = (node, name, anchor, global) => {
-      if (node[0] === 'L') return
-      const [, A, B, P, ax, e0, f] = node
-      walk(A, childName(name, 0), anchor, global)
-      const bName = childName(name, 1)
-      const leafB = primaryOf(B)
-      const leafName = B[0] === 'L' ? bName : treeLeaves(B, bName)[0].name
-      const bGroup = new THREE.Group()
-      anchor.add(bGroup)
-      const unseen = leafB[5] & 1
-      const r = rsOf(leafB[4]) * (unseen ? 0.6 : 1)
-      const uCol = uniform(unseen ? new THREE.Color(0x8a93a8) : surfaceColor(leafB[2] || 3600, new THREE.Color())) // unseen: a grey ghost, colour unknown
-      const surf = makeStarSurface(uCol); surf.userData.own = true
-      const glow = makeGlow(uCol); glow.userData.own = true
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 24), surf)
-      const halo = new THREE.Sprite(glow); halo.scale.setScalar(r * (unseen ? 2.5 : 4.5)); halo.renderOrder = 5
-      if (unseen) surf.colorNode = surf.colorNode.mul(0.55)
-      const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(r * 1.6, 0.4), 8, 6), hzMat)
-      hit.visible = false
-      bGroup.add(mesh, halo, hit)
-      const a = ax ?? 1
-      const e = clamp(e0 ?? 0, 0, 0.95)
-      const mTot = treeMass(node)
-      const per = P ?? 365.25 * Math.sqrt(a ** 3 / Math.max(mTot, 0.1))
-      const rsA = global ? rs : rsOf(primaryOf(A)[4])
-      const local = d => rsA + r + 0.35 + 1.25 * Math.log10(1 + d / 0.02)
-      const fn = global ? scale : local
-      const omega = rng() * Math.PI * 2
-      const pts = []
-      for (let k = 0; k <= 256; k++) {
-        const nu = k / 256 * Math.PI * 2
-        const rr = fn(a * (1 - e * e) / (1 + e * Math.cos(nu)))
-        pts.push(new THREE.Vector3(Math.cos(nu + omega) * rr, 0, -Math.sin(nu + omega) * rr))
-      }
-      const orbit = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), compOrbitMat)
-      orbit.renderOrder = 1
-      anchor.add(orbit)
-      const label = document.createElement('div')
-      label.className = 'lbl-planet'
-      label.textContent = `${model.title} ${leafName}`
-      labelsEl.appendChild(label)
-      planetLabels.push(label)
-      comps.push({
-        comp: true, leaf: leafB, leafName, pairName: bName, node, around: global ? model.title : `${model.title} ${treeLeaves(A, childName(name, 0))[0].name}`,
-        p: { name: `${model.title} ${leafName}`, short: leafName, a, per, e, kind: 'star', flags: f },
-        pr: r, e, omega, M0: rng() * Math.PI * 2, obj: bGroup, mesh, hit, orbit, el: label, label, inHZ: false, shown: null, scaleFn: fn, global,
-      })
-      walk(B, bName, bGroup, false)
-    }
-    walk(tree, '', root, true)
-  }
-  for (const o of objects) sysGroup.add(o)
 
-  const outerOf = ls => ls.map(l => l.scaleFn ? l.scaleFn(l.p.a * (1 + l.e)) : scale(l.p.a * (1 + l.e)))
-  const globals = [...live, ...comps.filter(c => c.global)]
-  const outer = globals.length ? Math.max(...outerOf(globals)) : r2
-  const span = globals.length ? Math.max(outer * 1.15, rs * 5.5, Math.min(r2 * 0.9, outer * 1.6)) : Math.max(r2, rs * 4)
-  const periods = (live.length ? live : comps).map(l => l.p.per ?? 365)
+  // Stars of a multiple system, built from the configuration tree with measured orbits where known
+  const comps = []
+  const make = (node, name, global) => {
+    if (node[0] === 'L') {
+      const vis = starVisual(node[2], node[4], node[5] & 1)
+      objects.push(vis.obj)
+      const body = newBody(node[3])
+      bodies.push(body)
+      return { kind: 'star', leaf: node, name, mass: node[3], body, obj: vis.obj, vis, planets: [] }
+    }
+    const left = node[1] === primaryOf(tree) ? primary : make(node[1], childName(name, 0), global)
+    if (left === primary) { primary.leaf = node[1]; primary.name = childName(name, 0) }
+    const right = make(node[2], childName(name, 1), false)
+    const mTot = left.mass + right.mass
+    const P = node[3] ?? TAU * Math.sqrt((node[4] ?? 1) ** 3 / (GK * mTot))
+    const w = (node[7] ?? rng() * 360) * DEG
+    const orbit = makeOrbit(P, node[5], w, node[9] != null ? node[9] * DEG : ref.i, node[10] != null ? node[10] * DEG : ref.O, 0, mTot)
+    orbit.tp = node[8] ?? (jdNow() - rng() * P)
+    const lines = new THREE.Group()
+    objects.push(lines)
+    const rsA = global ? rs : (firstStar(left).vis?.r ?? rs)
+    const rB = firstStar(right).vis.r
+    const fn = global ? scale : d => rsA + rB + 0.35 + 1.25 * Math.log10(1 + d / 0.02)
+    const pair = { kind: 'pair', A: left, B: right, node, mass: mTot, orbitEl: orbit, scale: fn, global, lines, name }
+    const B0 = firstStar(right)
+    const leafName = B0.name
+    const label = makeLabel(`${model.title} ${leafName}`)
+    comps.push({
+      comp: true, leaf: B0.leaf, leafName, node, pair, global,
+      around: `${model.title} ${firstStar(left).name || 'A'}`,
+      p: { name: `${model.title} ${leafName}`, short: leafName, a: orbit.a, per: P, e: orbit.e, kind: 'star', flags: node[6] },
+      pr: B0.vis.r, obj: B0.obj, mesh: B0.vis.mesh, hit: B0.vis.hit, orbit: null, el: label, label, inHZ: false, shown: null,
+      phase: node[8] != null ? 'periastron' : null, oriented: node[9] != null,
+    })
+    return pair
+  }
+  const firstStar = h => h.kind === 'star' ? h : firstStar(h.A)
+  const root = tree ? make(tree, '', true) : primary
+  if (!tree) primary.name = ''
+
+  for (const o of objects) if (o !== primaryGroup) sysGroup.add(o)
+
+  // Initial state: barycentric positions and velocities from the orbits, at the system's start time
+  const t0 = model.sol ? D.sol.jd : jdNow()
+  const place = (h, R, V) => {
+    if (h.kind === 'pair') {
+      const [r, v] = orbitState(h.orbitEl, t0)
+      const fA = h.B.mass / h.mass
+      place(h.A, add3(R, r, -fA), add3(V, v, -fA))
+      place(h.B, add3(R, r, 1 - fA), add3(V, v, 1 - fA))
+      return
+    }
+    let mp = 0, cr = [0, 0, 0], cv = [0, 0, 0]
+    const rel = h.planets.map(l => orbitState(l.orbitEl, t0))
+    h.planets.forEach((l, k) => { mp += l.body.m; cr = add3(cr, rel[k][0], l.body.m); cv = add3(cv, rel[k][1], l.body.m) })
+    const M = h.body.m + mp
+    const rs0 = add3(R, cr, -1 / M), vs0 = add3(V, cv, -1 / M)
+    setBody(h.body, rs0, vs0)
+    h.planets.forEach((l, k) => setBody(l.body, add3(rs0, rel[k][0]), add3(vs0, rel[k][1])))
+  }
+  if (model.sol) {
+    // JPL state vectors: Sun first, then the planets in order
+    D.sol.bodies.forEach(([, m, x, y, z, vx, vy, vz], k) => {
+      const b = k === 0 ? primary.body : live[k - 1].body
+      b.m = m
+      setBody(b, [x, y, z], [vx, vy, vz])
+    })
+  } else {
+    place(root, [0, 0, 0], [0, 0, 0])
+  }
+  accel(bodies)
+
+  // Step size: resolve the fastest periastron passage
+  const orbits = [...live.map(l => l.orbitEl), ...comps.map(c => c.pair.orbitEl)]
+  const h = orbits.length ? Math.min(...orbits.map(o => o.P * Math.pow(1 - o.e, 1.5) / 120)) : 1
+  const periods = (live.length ? live.map(l => l.p.per) : comps.map(c => c.p.per))
   const minP = periods.length ? Math.min(...periods) : 365
-  sys = { model, planets: [...live, ...comps], comps, objects, scale, span, rs, hz: [hzIn, hzOut], days: 0, dps: minP / 8 }
-  positionPlanets()
+
+  // Span for framing
+  const globals = [...live.map(l => scale(l.p.a * (1 + l.e))), ...comps.filter(c => c.global).map(c => scale(c.pair.orbitEl.a * (1 + c.pair.orbitEl.e)))]
+  const outer = globals.length ? Math.max(...globals) : r2
+  const span = globals.length ? Math.max(outer * 1.15, rs * 5.5, Math.min(r2 * 0.9, outer * 1.6)) : Math.max(r2, rs * 4)
+
+  // Toward Earth: known when the drawn plane comes from a transit or a measured visual orbit
+  let earth = null
+  if (ref.known) {
+    const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(qSky)
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([dir.clone().multiplyScalar(rs * 1.4), dir.clone().multiplyScalar(span * 1.05)]),
+      new THREE.LineBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.14, depthWrite: false }))
+    line.material.userData.own = true
+    sysGroup.add(line)
+    objects.push(line)
+    const obj = new THREE.Group()
+    obj.position.copy(dir).multiplyScalar(span * 1.05)
+    sysGroup.add(obj)
+    objects.push(obj)
+    earth = { obj, el: makeLabel('→ to Earth'), shown: null, pr: 0.05, dir }
+  }
+
+  sys = {
+    model, planets: [...live, ...comps], comps, objects, scale, span, rs, hz: [hzIn, hzOut], ref, qSky, root, primary,
+    bodies, h, t: t0, dps: minP / 8, rate: minP / 8, planetGroup, earth,
+    primaryPick: { prim: true, obj: primaryGroup, pr: rs, p: { name: model.title }, orbit: null }, // the main star, selectable like a body
+  }
+  if (model.sol) advance(jdNow() - t0, true) // JPL epoch is the build date: integrate forward to today
+  drawPaths()
+  layout()
+}
+
+// Path lines: the osculating ellipse of each relative orbit, redrawn now and then as gravity reshapes it
+const _u = new THREE.Vector3()
+function displayVec(rel, fn, out) {
+  const d = Math.hypot(rel[0], rel[1], rel[2])
+  return out.set(rel[0], rel[1], rel[2]).divideScalar(d || 1).applyQuaternion(sys.qSky).multiplyScalar(fn(d))
+}
+function relOf(a, b) { return [[b.x - a.x, b.y - a.y, b.z - a.z], [b.vx - a.vx, b.vy - a.vy, b.vz - a.vz]] }
+function bary(h) {
+  if (h.kind === 'star') {
+    let m = h.body.m, x = h.body.x * m, y = h.body.y * m, z = h.body.z * m, vx = h.body.vx * m, vy = h.body.vy * m, vz = h.body.vz * m
+    for (const l of h.planets) { const b = l.body; m += b.m; x += b.x * b.m; y += b.y * b.m; z += b.z * b.m; vx += b.vx * b.m; vy += b.vy * b.m; vz += b.vz * b.m }
+    return { m, x: x / m, y: y / m, z: z / m, vx: vx / m, vy: vy / m, vz: vz / m }
+  }
+  const a = bary(h.A), b = bary(h.B), m = a.m + b.m
+  const mix = k => (a[k] * a.m + b[k] * b.m) / m
+  return { m, x: mix('x'), y: mix('y'), z: mix('z'), vx: mix('vx'), vy: mix('vy'), vz: mix('vz') }
+}
+function pathLine(points, mat) {
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), mat)
+  line.renderOrder = 1
+  return line
+}
+function ellipsePoints(o, fn, k) {
+  const pts = []
+  for (let s = 0; s <= 256; s++) {
+    const f = s / 256 * TAU
+    const r = o.a * (1 - o.e * o.e) / (1 + o.e * Math.cos(f))
+    const rel = [0, 1, 2].map(j => r * (Math.cos(f) * o.p.getComponent(j) + Math.sin(f) * o.q.getComponent(j)))
+    pts.push(displayVec(rel, fn, new THREE.Vector3()).multiplyScalar(k))
+  }
+  return pts
+}
+function drawPaths() {
+  const swap = (holder, line) => {
+    if (holder.orbit) { holder.orbit.parent?.remove(holder.orbit); holder.orbit.geometry.dispose() }
+    holder.orbit = line
+  }
+  const sel = selPlanet
+  for (const l of sys.planets.filter(l => !l.comp)) {
+    const [r, v] = relOf(l.host.body, l.body)
+    const o = rvToOrbit(r, v, GK * (l.host.body.m + l.body.m))
+    const line = pathLine(ellipsePoints(o, sys.scale, 1), l === sel ? orbitSelMat : orbitMat)
+    swap(l, line)
+    sys.planetGroup.add(line)
+  }
+  for (const c of sys.comps) {
+    const pr = c.pair, a = bary(pr.A), b = bary(pr.B)
+    const o = rvToOrbit([b.x - a.x, b.y - a.y, b.z - a.z], [b.vx - a.vx, b.vy - a.vy, b.vz - a.vz], GK * pr.mass)
+    const fA = pr.B.mass / pr.mass
+    pr.lines.clear()
+    const lineB = pathLine(ellipsePoints(o, pr.scale, 1 - fA), c === sel ? orbitSelMat : compOrbitMat)
+    swap(c, lineB)
+    pr.lines.add(lineB)
+    if (fA > 0.02) pr.lines.add(pathLine(ellipsePoints(o, pr.scale, -fA), compOrbitMat))
+  }
+  sys.pathT = sys.t
+}
+
+// Display layout: each pair is drawn around its own barycentre, so both stars visibly orbit their common
+// centre of mass; separations go through the compressed scale, directions stay true.
+function layout() {
+  const place = (h, Dc) => {
+    if (h.kind === 'pair') {
+      const a = bary(h.A), b = bary(h.B)
+      displayVec([b.x - a.x, b.y - a.y, b.z - a.z], h.scale, _u)
+      const fA = h.B.mass / h.mass
+      h.lines.position.copy(Dc)
+      const DA = Dc.clone().addScaledVector(_u, -fA), DB = Dc.clone().addScaledVector(_u, 1 - fA)
+      place(h.A, DA)
+      place(h.B, DB)
+      return
+    }
+    h.obj.position.copy(Dc)
+    if (h.primary) sys.planetGroup.position.copy(Dc)
+    for (const l of h.planets) {
+      const [r] = relOf(h.body, l.body)
+      l.obj.position.copy(Dc).add(displayVec(r, sys.scale, _u))
+    }
+  }
+  place(sys.root, new THREE.Vector3())
+}
+
+// Advance simulated time by `days`, in steps fine enough for the closest periastron
+const MAX_STEPS = 2500
+function advance(days, catchUp = false) {
+  if (!sys.bodies.length || days <= 0) return days
+  let n = Math.ceil(days / sys.h)
+  const cap = catchUp ? 2e6 : MAX_STEPS
+  if (n > cap) { n = cap; days = n * sys.h } // too fast for this system: run slower rather than wrong
+  leapfrog(sys.bodies, days / n, n)
+  sys.t += days
+  return days
+}
+function resetTime() {
+  if (!sys) return
+  const sel = sys.planets.indexOf(selPlanet)
+  buildSystem(sys.model)
+  if (sel >= 0) selectPlanet(sys.planets[sel])
 }
 
 // Wider when companion stars set the span, so a wide companion is not hidden behind the panel
-const homeView = () => sys.comps.some(c => c.global) ? new THREE.Vector3(0, sys.span * 0.78, sys.span * 1.75) : new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35)
-
-function solveKepler(M, e) {
-  let E = e < 0.8 ? M : Math.PI
-  for (let k = 0; k < 12; k++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E))
-  return E
+// Opened from Earth's side when that direction is known, so the "to Earth" line comes toward you
+function homeView() {
+  const [up, out] = sys.comps.some(c => c.global) ? [0.78, 1.75] : [0.62, 1.35]
+  const az = sys.earth ? new THREE.Vector3(sys.earth.dir.x, 0, sys.earth.dir.z) : new THREE.Vector3(0, 0, 1)
+  if (az.lengthSq() < 1e-6) az.set(0, 0, 1) // seen pole-on: Earth is straight above, any azimuth works
+  return az.normalize().multiplyScalar(sys.span * out).setY(sys.span * up)
 }
-const _pp = new THREE.Vector3()
-function positionPlanets() {
-  for (const l of sys.planets) {
-    const per = l.p.per ?? 365
-    const M = (l.M0 + 2 * Math.PI * sys.days / per) % (2 * Math.PI)
-    const E = solveKepler(M, l.e)
-    const nu = 2 * Math.atan2(Math.sqrt(1 + l.e) * Math.sin(E / 2), Math.sqrt(1 - l.e) * Math.cos(E / 2))
-    const rr = (l.scaleFn ?? sys.scale)(l.p.a * (1 - l.e * Math.cos(E)))
-    l.obj.position.set(Math.cos(nu + l.omega) * rr, 0, -Math.sin(nu + l.omega) * rr)
-  }
-}
+const fmtJD = jd => { const d = new Date((jd - 2440587.5) * 86400000); return isNaN(d) ? '—' : d.toISOString().slice(0, 10) }
 
 // Labels
 const labelsEl = $('labels')
@@ -1304,7 +1571,8 @@ const conLabels = CONS.map(c => {
   const el = document.createElement('div')
   el.className = 'lbl-con'
   el.textContent = c.name
-  el.addEventListener('click', e => { e.stopPropagation(); selectCon(c, true) })
+  // a label can sit right on a bright star (Navi under CASSIOPEIA): the star wins
+  el.addEventListener('click', e => { e.stopPropagation(); if (!flying && !clickSkyHit(pickSky(rayAt(e.clientX, e.clientY)))) selectCon(c, true) })
   el.addEventListener('pointerenter', () => { labelHoverCon = c.i; refreshFigures() })
   el.addEventListener('pointerleave', () => { labelHoverCon = -1; refreshFigures() })
   labelsEl.appendChild(el)
@@ -1360,6 +1628,10 @@ function updateLabels() {
       const vis = !flying && screenOf(_wp, _sp)
       const pxR = l.pr / (_wp.distanceTo(camera.position) * Math.tan(camera.fov * DEG / 2)) * H / 2
       showLabel(l, vis, _sp.x, _sp.y, 0, -(pxR + 11))
+    }
+    if (sys.earth) {
+      sys.earth.obj.getWorldPosition(_wp)
+      showLabel(sys.earth, !flying && screenOf(_wp, _sp), _sp.x, _sp.y, 0, -10)
     }
   }
   updateSelRing()
@@ -1602,10 +1874,11 @@ function clearSelection() {
 }
 
 function selectPlanet(l) {
-  if (selPlanet) selPlanet.orbit.material = orbitMat
+  if (selPlanet?.orbit) selPlanet.orbit.material = orbitMat
   selPlanet = l
   sys.planets.forEach(x => x.label.classList.toggle('sel', x === l))
-  if (l) { l.orbit.material = orbitSelMat; showPlanetPanel(l) } else showSystemPanel()
+  if (l?.orbit) l.orbit.material = orbitSelMat
+  if (l && !l.prim) showPlanetPanel(l); else showSystemPanel()
   updateDrawer()
 }
 
@@ -1690,7 +1963,8 @@ function starRows(s, prefix = null) {
   if (!s.tree) return `<div class="ap-empty">${multWord(s.mult)}. The catalogue gives no configuration for the companions.</div>`
   return treeLeaves(s.tree).map(({ leaf, name }) => {
     const go = prefix && sys ? sys.planets.findIndex(l => l.comp && l.leaf === leaf) : -1
-    return row(go >= 0 ? `${prefix}${go}` : null, leaf[5] & 1 ? '#8a93a8' : cssColor(starTint(leaf[2] || 3600)), name || 'A', leafLabel(leaf), leaf[3] ? `~${fmtSig(leaf[3], 2)} M☉` : '')
+    const isPrimary = prefix && sys && leaf === sys.primary.leaf // the primary isn't a comp; route it like a click on its sphere
+    return row(isPrimary ? 'star' : go >= 0 ? `${prefix}${go}` : null, leaf[5] & 1 ? '#8a93a8' : cssColor(starTint(leaf[2] || 3600)), name || 'A', leafLabel(leaf), leaf[3] ? `~${fmtSig(leaf[3], 2)} M☉` : '')
   }).join('') + '<div class="ap-foot">Eggleton &amp; Tokovinin (2008). Masses ~ estimated from spectral types.</div>'
 }
 
@@ -1784,7 +2058,8 @@ function showSystemPanel() {
       kv('Mass', `${est(!m.sol && !st.massKnown)}${fmtSig(st.mass, 3)} M☉`) +
       (m.sol ? '' : kv('Distance', fmtLy(m.dist))) +
       (m.con != null ? kv('Constellation', esc(CONS[m.con].name), 'cyan') : '') +
-      (multi ? `<div class="ap-foot">Luminosity and radius blend the light of all ${m.mult} stars</div>` : ''), true),
+      (multi ? `<div class="ap-foot">Mass and radius are the primary's; luminosity blends the light of all ${m.mult} stars</div>` : ''), true),
+    colSection('Simulation', simulationRows(), true),
     multi && m.st ? colSection(`Stars · ${m.mult}`, starRows(m.st, 'p:'), true) : '',
     ordered.length ? colSection(`${m.simulated ? 'Simulated planets' : 'Planets'} · ${ordered.length}`, planetRows(ordered, 'p:'), true) : '',
     colSection('Habitable Zone',
@@ -1793,6 +2068,17 @@ function showSystemPanel() {
       kv('Planets inside', inHZ.length ? esc(inHZ.join(', ')) : 'none', inHZ.length ? 'green' : 'zero') +
       '<div class="ap-foot">Conservative estimate where liquid water could exist on an Earth-like surface. Orbits drawn on a compressed log scale.</div>', true),
   ].join(''))
+}
+
+function simulationRows() {
+  const all = sys.planets
+  const timed = all.filter(l => l.phase).length
+  const tilted = all.filter(l => l.oriented).length
+  return kv('Physics', `Newtonian N-body · ${sys.bodies.length} bodies`) +
+    kv('Positions today', all.length ? `${timed} of ${all.length} measured` : '—', timed === all.length && all.length ? 'green' : timed ? '' : 'zero') +
+    kv('Orbit tilt known', all.length ? `${tilted} of ${all.length}` : '—') +
+    kv('Drawn plane', esc(sys.ref.src)) +
+    '<div class="ap-foot">Started from today using transit, conjunction or periastron times (JPL Horizons for the Solar System). Bodies without a measured time are placed at random along their orbit. Press T to return to today.</div>'
 }
 
 function showCompanionPanel(l) {
@@ -1812,7 +2098,10 @@ function showCompanionPanel(l) {
       kv(sepLbl, nf & 2 ? 'unknown' : `${nf & 1 ? '~' : ''}${fmtSig(l.p.a, 3)} AU`) +
       kv('Period', l.node[3] ? fmtPeriod(l.node[3]) : nf & 2 ? 'unknown' : `~${fmtPeriod(l.p.per)}`) +
       kv('Eccentricity', l.node[5] != null ? fmtSig(l.node[5], 2) : '—') +
-      '<div class="ap-foot">Configuration from Eggleton &amp; Tokovinin (2008). Orbits drawn relative to the brighter star, on a compressed scale.</div>', true),
+      kv('Inclination', l.node[9] != null ? `${fmtSig(l.node[9], 3)}°` : 'unknown') +
+      kv('Orbit source', l.node[11] ? `${l.node[11]} (measured)` : 'estimated', l.node[11] ? 'green' : 'zero') +
+      kv('Position today', l.phase ? 'from periastron time' : 'unknown, illustrative', l.phase ? 'green' : 'zero') +
+      '<div class="ap-foot">Configuration from Eggleton &amp; Tokovinin (2008); orbits from ORB6 (USNO) and SB9 (Pourbaix et al.). Both stars circle their common centre of mass, on a compressed scale.</div>', true),
   ].join(''))
 }
 
@@ -1832,7 +2121,9 @@ function showPlanetPanel(l) {
       kv('Semi-major axis', `${est(f & 1 || p.sim)}${fmtSig(p.a, 3)} AU`) +
       kv('Period', `${est(f & 2 || p.sim)}${fmtPeriod(p.per)}`) +
       kv('Eccentricity', p.e != null ? fmtSig(p.e, 2) : '—') +
-      kv('Habitable zone', l.inHZ ? 'inside' : p.a < sys.hz[0] ? 'too hot (inside)' : 'too cold (outside)', l.inHZ ? 'green' : 'zero'), true),
+      kv('Habitable zone', l.inHZ ? 'inside' : p.a < sys.hz[0] ? 'too hot (inside)' : 'too cold (outside)', l.inHZ ? 'green' : 'zero') +
+      (p.sol ? kv('Position today', 'JPL Horizons', 'green') : kv('Position today', l.phase === 'transit' ? 'from transit timing' : l.phase === 'periastron' ? 'from periastron time' : 'unknown, illustrative', l.phase ? 'green' : 'zero')) +
+      (p.sol ? '' : kv('Inclination', p.incl != null ? `${fmtSig(p.incl, 3)}°` : 'unknown')), true),
     colSection('Physical',
       kv('Radius', p.r != null ? `${est(f & 4 || p.sim)}${fmtSig(p.r, 3)} R⊕` : 'unknown') +
       kv(mLbl, p.m != null ? `${est(p.sim)}${fmtSig(p.m, 3)} M⊕` : 'unknown') +
@@ -1858,6 +2149,7 @@ $('ip-content').addEventListener('click', e => {
   if (kind === 's') selectStar(STARS[+idx], true)
   else if (kind === 'y') { const sy = SYSTEMS[+idx]; mode === 'sky' ? selectHost(sy, true) : null }
   else if (kind === 'p') selectPlanet(sys.planets[+idx])
+  else if (kind === 'star') selectPlanet(sys.primaryPick)
 })
 function enterSelected() {
   if (mode !== 'sky' || !sel) return
@@ -1931,10 +2223,11 @@ function updateDrawer() {
       item('Distance', m.sol ? '0 ly' : fmtLy(m.dist)) +
       item('Planets', m.planets.length) +
       item('Habitable Zone', `${fmtSig(h1, 2)}–${fmtSig(h2, 2)} AU`) +
+      item('Date', '—', false, 'v-date') +
       item('Time', '—', false, 'v-time')
     _hud = ''
     updateHud()
-    const p = selPlanet?.p
+    const p = selPlanet?.prim ? null : selPlanet?.p
     const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
     if (p) {
       chem.innerHTML = badge + chemItem('Planet', esc(p.name)) + chemItem('Type', KIND[p.kind].label) +
@@ -1965,11 +2258,13 @@ function updateHud() {
     $('v-dec').textContent = fmtDec(dec).slice(0, 8)
     $('v-fov').textContent = `${Math.round(camera.fov)}°`
   } else if (sys) {
-    const dps = sys.dps * orbitMul()
+    const dps = sys.rate
     const s = dps >= 365.25 ? `1s = ${fmtSig(dps / 365.25, 2)} yr` : dps >= 1 ? `1s = ${fmtSig(dps, 2)} d` : `1s = ${fmtSig(dps * 24, 2)} h`
-    if (s === _hud) return
-    _hud = s
+    const date = fmtJD(sys.t)
+    if (s + date === _hud) return
+    _hud = s + date
     const t = $('v-time'); if (t) t.textContent = s
+    const d = $('v-date'); if (d) d.textContent = date
   }
 }
 const orbitMul = () => Math.pow(2, (settings.orbit - 26) / 5)
@@ -2014,7 +2309,7 @@ function pickPlanet(x, y) {
   rayAt(x, y)
   const hits = raycaster.intersectObjects(sys.planets.flatMap(l => [l.mesh, l.hit]), false)
   if (hits.length) return sys.planets.find(l => l.mesh === hits[0].object || l.hit === hits[0].object)
-  if (raycaster.intersectObject(sunMesh, false).length) return 'star'
+  if (raycaster.intersectObject(sunMesh, false).length) return sys.primaryPick
   return null
 }
 
@@ -2058,35 +2353,38 @@ function processHover() {
   } else {
     const hit = pickPlanet(x, y)
     wrap.classList.toggle('pointer', !!hit)
-    if (hit && hit !== 'star') {
+    if (hit && !hit.prim) {
       showTip(lx, ly, `${esc(hit.p.name)}<div class="t-sub">${KIND[hit.p.kind].label} · ${fmtSig(hit.p.a, 3)} AU</div>`)
-    } else if (hit === 'star') {
+    } else if (hit) {
       showTip(lx, ly, `${esc(sys.model.star.name)}<div class="t-sub">${esc(sys.model.star.spect || '')}</div>`)
     } else hideTip()
   }
 }
 
+// First click selects a star or host, a second click on it flies in. Returns false when nothing was hit.
+function clickSkyHit(hit) {
+  if (hit?.type === 'star') {
+    if (sel?.type === 'star' && sel.star === hit.star) enterSystem({ type: 'star', star: hit.star })
+    else selectStar(hit.star)
+  } else if (hit?.type === 'host') {
+    if (sel?.type === 'host' && sel.sys === hit.sys) enterSystem({ type: 'sys', sys: hit.sys })
+    else selectHost(hit.sys)
+  } else return false
+  return true
+}
 canvas.addEventListener('click', e => {
   if (flying) return
   if (Math.hypot(e.clientX - _downX, e.clientY - _downY) > 5) return
   if (mode === 'sky') {
     const dir = rayAt(e.clientX, e.clientY)
-    const hit = pickSky(dir)
-    if (hit?.type === 'star') {
-      if (sel?.type === 'star' && sel.star === hit.star) enterSystem({ type: 'star', star: hit.star })
-      else selectStar(hit.star)
-    } else if (hit?.type === 'host') {
-      if (sel?.type === 'host' && sel.sys === hit.sys) enterSystem({ type: 'sys', sys: hit.sys })
-      else selectHost(hit.sys)
-    } else {
+    if (!clickSkyHit(pickSky(dir))) {
       const c = CONS[conAt(dir)]
       if (sel?.type === 'con' && sel.con === c) clearSelection()
       else selectCon(c)
     }
   } else {
     const hit = pickPlanet(e.clientX, e.clientY)
-    if (hit === 'star') selectPlanet(null)
-    else if (hit) selectPlanet(hit === selPlanet ? null : hit)
+    if (hit) selectPlanet(hit === selPlanet ? null : hit)
   }
 })
 
@@ -2135,6 +2433,9 @@ function norm(s) {
 function queryKeys(q) {
   const t = q.trim().toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
   const keys = [norm(t)]
+  // Flamsteed: "40 eridani", "40 eri a" → "40eri" (a component letter goes to the whole system)
+  const f = t.match(/^(\d+)\s+(.+?)(?:\s+([a-z]))?$/)
+  if (f) { const ab = GEN_TO.get(norm(f[2])) ?? ABBR_TO.get(norm(f[2])); if (ab) keys.unshift(...(f[3] ? [f[1] + ab + f[3]] : []), f[1] + ab) } // "51 peg b" the planet first
   const m = t.match(/^([a-zα-ω]+)\s*(\d*)\s+(.+)$/)
   if (m) {
     const g = GREEK_WORDS[m[1]] ?? (/^[α-ω]$/.test(m[1]) ? m[1] : null)
@@ -2262,6 +2563,7 @@ window.addEventListener('keydown', e => {
   }
   if (e.key === 'Enter') enterSelected()
   if (e.key === 'r' || e.key === 'R') resetView()
+  if ((e.key === 't' || e.key === 'T') && mode === 'system') resetTime()
 })
 function resetView() {
   if (mode === 'sky') {
@@ -2325,8 +2627,10 @@ renderer.setAnimationLoop(now => {
     controls.rotateSpeed = -0.32 * camera.fov / 60
     updateStarScales()
   } else if (sys) {
-    sys.days += dt * sys.dps * orbitMul()
-    positionPlanets()
+    const did = advance(dt * sys.dps * orbitMul())
+    if (dt > 0) sys.rate = did / dt
+    layout()
+    if (Math.abs(sys.t - sys.pathT) > sys.dps * 40) drawPaths() // gravity slowly reshapes the orbits
     for (const l of sys.planets) l.mesh.rotation.y += dt * 0.35
     if (selPlanet && !anim) {
       selPlanet.obj.getWorldPosition(_wp)

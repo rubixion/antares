@@ -4,6 +4,8 @@
   Stellarium "modern" sky culture https://github.com/Stellarium/stellarium (figures, names, IAU boundaries)
   NASA Exoplanet Archive        https://exoplanetarchive.ipac.caltech.edu (pscomppars, every confirmed planet)
   Eggleton & Tokovinin (2008)   VizieR J/MNRAS/389/869, multiplicity of every star brighter than V = 6
+  ORB6 (USNO) and SB9 (VizieR B/sb9)  measured visual and spectroscopic binary orbits
+  JPL Horizons                  Solar System state vectors on the build date
 
 Usage:  python tools/build_data.py [cache_dir]
 Downloads are cached in cache_dir (default tools/.cache). Delete it to refresh the snapshot.
@@ -21,7 +23,14 @@ MAG_LIMIT = 6.5  # naked-eye limit under a dark sky
 
 PLANET_COLS = ('pl_name,hostname,hip_name,sy_snum,pl_orbsmax,pl_orbper,pl_orbeccen,pl_rade,pl_bmasse,'
                'pl_bmassprov,pl_eqt,pl_insol,disc_year,discoverymethod,disc_facility,st_spectype,st_teff,'
-               'st_rad,st_mass,st_lum,sy_dist,sy_vmag,ra,dec')
+               'st_rad,st_mass,st_lum,sy_dist,sy_vmag,ra,dec,pl_orblper,pl_orbtper,pl_tranmid,pl_orbincl,tran_flag')
+EPOCH = date.today().isoformat()  # Solar System state vectors are taken at 00:00 TDB on the build date
+SOL_BODIES = [('Sun', 10), ('Mercury', 199), ('Venus', 299), ('Earth', 3), ('Mars', 499), ('Jupiter', 599),
+              ('Saturn', 699), ('Uranus', 799), ('Neptune', 899)]
+# Masses in solar masses (IAU 2015 nominal GM ratios). "Earth" is the Earth-Moon barycentre with their combined
+# mass: Earth's own centre wobbles monthly around it at ~12 m/s, which without a Moon would become a drift.
+SOL_MASS = dict(Sun=1.0, Mercury=1.6601e-7, Venus=2.4478e-6, Earth=3.0404e-6, Mars=3.2272e-7, Jupiter=9.5479e-4,
+                Saturn=2.8589e-4, Uranus=4.3662e-5, Neptune=5.1514e-5)
 SOURCES = {
     'hyg.csv': 'https://raw.githubusercontent.com/astronexus/HYG-Database/main/hyg/CURRENT/hygdata_v41.csv',
     'modern.json': 'https://raw.githubusercontent.com/Stellarium/stellarium/master/skycultures/modern/index.json',
@@ -31,6 +40,16 @@ SOURCES = {
                         '&-out=mHR,N,u_N,Conf&-out.max=unlimited',
     'multiplicity_xref.tsv': 'https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=J/MNRAS/389/869/table2'
                              '&-out=mHR,HIP&-out.max=unlimited',
+    # Visual binary orbits (USNO): period, inclination, node, periastron time, eccentricity, argument of periastron
+    'orb6.txt': 'https://crf.usno.navy.mil/data_products/WDS/orb6/orb6orbits.txt',
+    # Spectroscopic binary orbits (Pourbaix et al.): period, periastron JD, e, omega, velocity amplitudes
+    'sb9_main.tsv': 'https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=B/sb9/main&-out=Seq,Name&-out.max=unlimited',
+    'sb9_orbits.tsv': 'https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=B/sb9/orbits'
+                      '&-out=Seq,o,Per,T0,e,omega,K1,K2,Grade&-out.max=unlimited',
+    **{f'horizons_{n}_{EPOCH}.txt': 'https://ssd.jpl.nasa.gov/api/horizons.api?format=text&' + urllib.parse.urlencode({
+        'COMMAND': f"'{n}'", 'EPHEM_TYPE': "'VECTORS'", 'CENTER': "'500@0'", 'START_TIME': f"'{EPOCH}'",
+        'STOP_TIME': f"'{EPOCH} 00:01'", 'STEP_SIZE': "'1'", 'OUT_UNITS': "'AU-D'", 'REF_PLANE': "'ECLIPTIC'",
+        'VEC_TABLE': "'2'", 'CSV_FORMAT': "'YES'"}) for _, n in SOL_BODIES},
 }
 
 GREEK = dict(Alp='α', Bet='β', Gam='γ', Del='δ', Eps='ε', Zet='ζ', Eta='η', The='θ', Iot='ι', Kap='κ', Lam='λ',
@@ -63,9 +82,14 @@ def fetch(name):
         print('downloading', name)
         try:
             urllib.request.urlretrieve(SOURCES[name], path)
-        except urllib.error.URLError:  # some Python installs lack the CA chain VizieR uses; curl has the OS store
+        except urllib.error.URLError:
+            # Some Python installs lack the CA chains VizieR and JPL use; Windows' own curl reads the OS store
             import subprocess
-            subprocess.run(['curl', '-sSfL', '-o', path, SOURCES[name]], check=True)
+            for curl in ('curl', r'C:\Windows\System32\curl.exe'):
+                if subprocess.run([curl, '-sSfL', '-m', '120', '-o', path, SOURCES[name]]).returncode == 0:
+                    break
+            else:
+                raise
     return path
 
 
@@ -459,6 +483,139 @@ def load_multiplicity():
             if len(p) > 1 and p[1].strip().isdigit() and int(p[0]) in systems}
 
 
+def planet_orientation(p):
+    """[omega deg, periastron JD, conjunction JD, inclination deg]: where the planet is on its orbit, today.
+
+    pl_tranmid is the mid-transit time, or for radial-velocity planets the inferior conjunction; either way
+    the planet is then between its star and us. Inclinations are kept only when measured: the archive
+    stores 90 as a placeholder for many radial-velocity planets."""
+    w = num(p['pl_orblper'])
+    incl = num(p['pl_orbincl'])
+    if p['tran_flag'] == 1:
+        incl = incl if incl is not None else 90.0
+    elif incl is not None and abs(incl - 90) < 1e-6:
+        incl = None
+    return [rnd(w % 360, 2) if w is not None else None, rnd(num(p['pl_orbtper']), 4),
+            rnd(num(p['pl_tranmid']), 5), rnd(incl, 2)]
+
+
+# Measured binary orbits
+#
+# ORB6 (visual orbits) gives the full 3D orientation: inclination i, node Omega and omega. SB9 (spectroscopic)
+# gives omega of the primary's own orbit and the periastron time; the companion's relative orbit has omega + 180.
+# A catalogue orbit is matched to a configuration pair when the periods agree within 15 per cent.
+
+def jd_from(value, unit):
+    if unit == 'y':
+        return 2451545.0 + (value - 2000.0) * 365.25
+    if unit == 'd':
+        return value + 2400000.0
+    if unit == 'm':
+        return value + 2400000.5
+    return None
+
+
+def load_orb6():
+    """HIP -> list of {P days, T JD, e, w, i, O}. Grades 1-4 only (5 is 'indeterminate')."""
+    lines = open(fetch('orb6.txt'), encoding='latin-1').read().split('\n')
+    hdr = next(l for l in lines if l.startswith('RA,Dec'))
+    col = {t: (hdr.find(t), hdr.find(t) + len(t)) for t in
+           ('HIP...', 'PPPP.PPPPPP*', 'III.IIII', 'NNN.NNNN*', 'TTTTT.TTTTTT*', 'E.EEEEEE', 'OOO.OOOO')}
+    grade_at = hdr.find(' G ') + 1
+    to_days = dict(m=1 / 1440, h=1 / 24, d=1, y=365.25, c=36525)
+    out = defaultdict(list)
+    for l in lines:
+        if len(l) < 220 or not l[:2].strip().isdigit():
+            continue
+        get = lambda t: l[col[t][0]:col[t][1]]
+        hip, grade = get('HIP...').strip(), l[grade_at].strip()
+        if not hip.isdigit() or not grade.isdigit() or not 1 <= int(grade) <= 4:
+            continue
+        p_raw, t_raw = get('PPPP.PPPPPP*'), get('TTTTT.TTTTTT*')
+        period, t_val = num(p_raw[:-1]), num(t_raw[:-1])
+        if period is None or p_raw[-1] not in to_days:
+            continue
+        out[int(hip)].append(dict(P=period * to_days[p_raw[-1]], T=t_val is not None and jd_from(t_val, t_raw[-1]),
+                                  e=num(get('E.EEEEEE')), w=num(get('OOO.OOOO')), i=num(get('III.IIII')),
+                                  O=num(get('NNN.NNNN*')[:-1]), src='ORB6', grade=int(grade)))
+    return out
+
+
+def load_sb9():
+    """HIP -> list of {P, T, e, w (of the companion's relative orbit), q = m2/m1 or None}."""
+    def rows(name):
+        for line in open(fetch(name), encoding='utf8'):
+            parts = line.rstrip('\n').split('\t')
+            if not line.startswith('#') and parts[0].strip().isdigit():
+                yield [x.strip() for x in parts]
+    hip_of = {}
+    for seq, name in rows('sb9_main.tsv'):
+        if name.startswith('HIP '):
+            hip_of[seq] = int(name[4:])
+    out = defaultdict(list)
+    for seq, _, per, t0, e, w, k1, k2, grade in rows('sb9_orbits.tsv'):
+        if seq not in hip_of or num(per) is None:
+            continue
+        k1, k2 = num(k1), num(k2)
+        out[hip_of[seq]].append(dict(P=num(per), T=num(t0), e=num(e),
+                                     w=(num(w) + 180) % 360 if num(w) is not None else None,
+                                     q=k1 / k2 if k1 and k2 else None, src='SB9', grade=num(grade) or 0))
+    return out
+
+
+def attach_orbits(node, cands):
+    """Fill measured orbit elements into a compact configuration tree, in place.
+
+    Pair layout after this: ['N', A, B, P, a, e, flags, w, T, i, O, src]."""
+    if node[0] != 'N':
+        return
+    attach_orbits(node[1], cands)
+    attach_orbits(node[2], cands)
+    node.extend([None, None, None, None, ''])
+    period = node[3]
+    if not period:
+        return
+    best = None
+    for c in cands:
+        if abs(math.log(c['P'] / period)) < math.log(1.15):
+            # prefer a visual orbit (it has i and Omega), then the better grade
+            key = (c['src'] == 'ORB6', c['grade'])
+            if best is None or key > best[0]:
+                best = (key, c)
+    if not best:
+        return
+    c = best[1]
+    node[3] = sig(c['P'], 7)
+    if c['e'] is not None:
+        node[5] = c['e']
+    node[7] = rnd(c['w'], 2)
+    node[8] = rnd(c['T'], 4) if c['T'] else None
+    node[9] = rnd(c.get('i'), 2)
+    node[10] = rnd(c.get('O'), 2)
+    node[11] = c['src']
+    a, b = node[1], node[2]
+    if c.get('q') and a[0] == 'L' and b[0] == 'L' and 0.05 < c['q'] <= 1.2:
+        b[3] = sig(a[3] * c['q'], 2)  # double-lined: the velocity ratio gives the mass ratio
+    m_tot = tree_mass(node)
+    node[4] = sig((m_tot * (node[3] / 365.25) ** 2) ** (1 / 3), 4)
+
+
+def tree_mass(n):
+    return n[3] if n[0] == 'L' else tree_mass(n[1]) + tree_mass(n[2])
+
+
+def load_sol():
+    """Barycentric ecliptic state vectors (AU, AU/day) for the Sun and planets at EPOCH, from JPL Horizons."""
+    out = []
+    for name, n in SOL_BODIES:
+        text = open(fetch(f'horizons_{n}_{EPOCH}.txt'), encoding='utf8').read()
+        rec = text[text.index('$$SOE') + 5:text.index('$$EOE')].strip().split('\n')[0].split(',')
+        jd = float(rec[0])
+        x, y, z, vx, vy, vz = (float(v) for v in rec[2:8])
+        out.append([name, SOL_MASS[name], x, y, z, vx, vy, vz])
+    return dict(jd=jd, bodies=out)
+
+
 # Build
 
 def main():
@@ -515,7 +672,8 @@ def main():
             rows.append([p['pl_name'], sig(a, 4), sig(per, 5), rnd(num(p['pl_orbeccen']), 3), rnd(r, 2),
                          sig(m, 4), 1 if p['pl_bmassprov'] == 'Msini' else 0, rnd(teq, 0),
                          sig(num(p['pl_insol']), 3), p['disc_year'],
-                         intern(methods, p['discoverymethod']), intern(facilities, p['disc_facility']), flags])
+                         intern(methods, p['discoverymethod']), intern(facilities, p['disc_facility']), flags,
+                         *planet_orientation(p)])
         if not rows:
             continue
         hip = int(s0['hip_name'].split()[1]) if s0['hip_name'] else 0
@@ -543,7 +701,14 @@ def main():
         return n
 
     mult_cat = load_multiplicity()
-    parsed = [0, 0]
+    orb6, sb9 = load_orb6(), load_sb9()
+    parsed, measured = [0, 0], [0, 0]
+
+    def iter_pairs(n):
+        if n[0] == 'N':
+            yield n
+            yield from iter_pairs(n[1])
+            yield from iter_pairs(n[2])
 
     def star_multiplicity(r, plx, snum):
         """(number of stars, configuration tree or 0). The bright-star catalogue wins where it has the star."""
@@ -557,6 +722,9 @@ def main():
                 parsed[0 if node else 1] += 1
                 if node and plx:
                     tree = build_tree(node, plx)[0]
+                    attach_orbits(tree, orb6.get(hip, []) + sb9.get(hip, []))
+                    measured[0] += sum(1 for _ in iter_pairs(tree) if _[11])
+                    measured[1] += sum(1 for _ in iter_pairs(tree))
             return max(n, snum), tree
         return max(multiplicity(r), snum), 0
 
@@ -631,7 +799,7 @@ def main():
     data = dict(
         built=date.today().isoformat(),
         stars=stars, cons=cons, bounds=boundary_polylines(edges), grid=grid_str, alphabet=alphabet,
-        systems=out_systems, methods=methods, facilities=facilities,
+        systems=out_systems, methods=methods, facilities=facilities, sol=load_sol(),
     )
     js = ('// Generated by tools/build_data.py. Do not edit by hand.\n'
           '// Stars: HYG v4.1 (CC BY-SA 4.0). Figures, names and IAU boundaries: Stellarium (GPL-2.0).\n'
@@ -647,8 +815,15 @@ def main():
     print(f'stars {len(stars)}  systems {len(systems)}  planets {sum(len(s["planets"]) for s in systems)}'
           f'  boundary agreement with HYG {agree:.4%}  size {len(js) / 1e6:.2f} MB')
     assert agree > 0.995, 'boundary lookup disagrees with HYG constellation labels'
-    print(f'multiple-star configurations parsed {parsed[0]}, unparsed {parsed[1]}')
+    print(f'multiple-star configurations parsed {parsed[0]}, unparsed {parsed[1]}; '
+          f'pairs with a measured orbit {measured[0]} of {measured[1]}')
     assert parsed[0] > 10 * parsed[1], 'multiplicity parser is failing too often'
+    sol = data['sol']['bodies']
+    earth_sun = math.dist(sol[3][2:5], sol[0][2:5])
+    assert 0.98 < earth_sun < 1.02, earth_sun
+    shaula = next(s for s in stars if s[0] == 85927)[18]
+    assert shaula[11] == 'ORB6' and shaula[9] == 77.2 and shaula[3] == 1052.8, shaula[3:]  # Tango et al. (2006)
+    print(f'Solar System epoch JD {data["sol"]["jd"]}, Earth-Sun {earth_sun:.4f} AU')
 
 
 def self_test():
