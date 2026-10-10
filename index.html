@@ -1,0 +1,2309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Constellations</title>
+  <meta name="description" content="Explore all 88 constellations in 3D. Click any star to fly into its planetary system, built from every confirmed exoplanet in the NASA Exoplanet Archive.">
+  <style>
+    :root {
+      --cyan:   rgb(100, 130, 210);
+      --purple: rgb(80, 105, 185);
+      --bg:     #07070f;
+      --card:   rgba(255,255,255,0.03);
+      --border: rgba(255,255,255,0.08);
+      --font:   'JetBrains Mono', 'Courier New', monospace;
+    }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: #fff; }
+    body { font-family: var(--font); }
+
+    /* CSS dot grid behind transparent 3D canvas */
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background-color: var(--bg);
+      background-image: radial-gradient(rgba(255,255,255,var(--dot-alpha,0.12)) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    #app { position: relative; width: 100%; height: 100%; }
+
+    #canvas-wrap { position: absolute; inset: 0; z-index: 1; }
+    #canvas-wrap canvas { display: block; width: 100% !important; height: 100% !important; background: transparent; touch-action: none; }
+    #canvas-wrap.pointer canvas { cursor: pointer; }
+
+    /* header */
+    #header {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 20px 28px;
+      display: flex; align-items: center; gap: 20px;
+      background: linear-gradient(to bottom, rgba(7,7,15,0.92) 0%, transparent 100%);
+    }
+    #title {
+      color: var(--cyan); font-size: 10px; letter-spacing: 4px;
+      text-transform: uppercase; font-weight: 700; white-space: nowrap;
+    }
+    #search-row { display: flex; gap: 8px; flex: 1; max-width: 400px; }
+
+    #search-input {
+      flex: 1; min-width: 0; background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 14px; color: #fff;
+      font-family: var(--font); font-size: 13px;
+      outline: none; transition: border-color 0.2s;
+    }
+    #search-input::placeholder { color: rgba(255,255,255,0.2); }
+    #search-input:focus { border-color: rgba(100,130,210,0.5); }
+    #search-input::-webkit-calendar-picker-indicator { display: none !important; }
+
+    .btn {
+      background: rgba(100,130,210,0.1);
+      border: 1px solid rgba(100,130,210,0.3); border-radius: 8px;
+      color: var(--cyan); padding: 8px 18px;
+      font-family: var(--font); font-size: 11px; font-weight: 700;
+      cursor: pointer; transition: all 0.2s; letter-spacing: 1px; white-space: nowrap;
+    }
+    .btn:hover { background: rgba(100,130,210,0.2); border-color: rgba(100,130,210,0.5); }
+    #back-btn { display: none; }
+    body.in-system #back-btn { display: block; }
+
+    :focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
+
+    /* error toast */
+    #error {
+      position: absolute; top: 72px; left: 50%; transform: translateX(-50%);
+      z-index: 20; padding: 8px 20px; border-radius: 8px;
+      background: rgba(255,60,60,0.1); border: 1px solid rgba(255,60,60,0.3);
+      color: rgba(255,120,120,0.9); font-size: 11px; letter-spacing: 0.5px;
+      opacity: 0; transition: opacity 0.3s; pointer-events: none; white-space: nowrap;
+    }
+    #error.show { opacity: 1; }
+
+    /* loading */
+    #loading {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      z-index: 20; text-align: center; color: rgba(255,255,255,0.25);
+      font-size: 10px; letter-spacing: 4px;
+    }
+
+    /* scene fade between sky and system */
+    #fade {
+      position: absolute; inset: 0; z-index: 4; pointer-events: none;
+      background: var(--bg); opacity: 0; transition: opacity 0.28s ease;
+    }
+    #fade.show { opacity: 1; }
+
+    /* labels projected from 3D */
+    #labels { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+    #labels > div { position: absolute; left: 0; top: 0; white-space: nowrap; will-change: transform; }
+    .lbl-con {
+      pointer-events: auto; cursor: pointer; user-select: none;
+      color: rgba(255,255,255,0.32); font-size: 8.5px; letter-spacing: 3px; text-transform: uppercase;
+      transition: color 0.2s; padding: 4px;
+    }
+    .lbl-con:hover, .lbl-con.hover { color: rgba(255,255,255,0.6); }
+    .lbl-con.sel { color: var(--cyan); }
+    .lbl-star { color: rgba(255,255,255,0.42); font-size: 9.5px; letter-spacing: 0.3px; }
+    .lbl-star.sel { color: #fff; }
+    .lbl-planet { color: rgba(255,255,255,0.45); font-size: 9.5px; letter-spacing: 0.3px; }
+    .lbl-planet.sel { color: var(--cyan); }
+
+    #sel-ring {
+      position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none;
+      border: 1px solid rgba(100,130,210,0.75); border-radius: 50%;
+      box-shadow: 0 0 12px rgba(100,130,210,0.35);
+      visibility: hidden; will-change: transform;
+    }
+
+    #tip {
+      position: absolute; left: 0; top: 0; z-index: 12; pointer-events: none;
+      padding: 7px 11px; border-radius: 9px;
+      background: rgba(7,7,15,0.88); backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      font-size: 10px; color: #fff; white-space: nowrap;
+      visibility: hidden;
+    }
+    #tip .t-sub { color: rgba(255,255,255,0.35); font-size: 8.5px; letter-spacing: 1px; margin-top: 3px; }
+    #tip .t-sub.accent { color: var(--cyan); }
+
+    /* shared panel base */
+    .panel {
+      background: rgba(7,7,15,0.82); backdrop-filter: blur(20px);
+      border: 1px solid var(--border); border-radius: 14px; padding: 14px 20px;
+    }
+
+    /* bottom drawer, single-line strip */
+    #bottom-drawer {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      height: 62px;
+      background: rgba(7,7,15,0.90); backdrop-filter: blur(24px);
+      border-top: 1px solid var(--border);
+    }
+    #bd-compound {
+      height: 100%; padding: 0 26px;
+      display: flex; flex-direction: row; align-items: center; gap: 22px;
+      overflow: hidden;
+    }
+    .bd-stats-row { display: contents; }
+    .info-item { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+    .lbl { color: rgba(255,255,255,0.22); font-size: 7.5px; letter-spacing: 2px; text-transform: uppercase; }
+    .val { color: #fff; font-size: 12px; font-weight: 700; }
+    .val.accent { color: var(--cyan); }
+    .bd-chem-row {
+      display: flex; gap: 18px; align-items: center; flex-shrink: 0;
+      border-left: 1px solid rgba(255,255,255,0.06); padding-left: 22px; margin-left: 4px;
+    }
+    .bd-empty { color: rgba(255,255,255,0.09); font-size: 8.5px; letter-spacing: 2px; text-transform: uppercase; }
+    .bd-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 11px; border-radius: 20px; font-size: 8.5px; font-weight: 700;
+      letter-spacing: 0.8px; text-transform: uppercase; flex-shrink: 0;
+    }
+    .bd-badge.polar    { background: rgba(255,170,0,0.10);  border: 1px solid rgba(255,170,0,0.22);  color: #ffaa00; }
+    .bd-badge.nonpolar { background: rgba(80,200,120,0.09); border: 1px solid rgba(80,200,120,0.20); color: #55cc80; }
+    .bd-badge.ionic    { background: rgba(160,100,255,0.10);border: 1px solid rgba(160,100,255,0.22);color: #b07cf8; }
+    .bd-badge.accent   { background: rgba(100,130,210,0.10);border: 1px solid rgba(100,130,210,0.25);color: var(--cyan); }
+    .bd-chem-item { display: flex; flex-direction: column; gap: 2px; }
+    .bd-chem-lbl { color: rgba(255,255,255,0.18); font-size: 7.5px; letter-spacing: 2px; text-transform: uppercase; }
+    .bd-chem-val { color: rgba(255,255,255,0.65); font-size: 10px; font-weight: 600; }
+
+    /* right-side column: legend + detail */
+    #right-panel {
+      position: absolute; top: 72px; right: 28px; z-index: 10;
+      width: 195px; display: flex; flex-direction: column; gap: 10px;
+      max-height: calc(100vh - 196px); overflow: hidden;
+      transition: width 0.22s ease;
+    }
+    #right-panel.expanded { width: 270px; }
+
+    /* legend */
+    .leg-title { color: rgba(255,255,255,0.22); font-size: 8.5px; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 10px; }
+    .leg-title:not(:first-child) { margin-top: 12px; }
+    .leg-row { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; font-size: 11px; color: rgba(255,255,255,0.45); }
+    .leg-dot  { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+    .leg-bond { width: 18px; height: 2px; border-radius: 1px; flex-shrink: 0; background: rgba(100,130,210,0.7); }
+    .leg-bond.faint { background: rgba(255,255,255,0.18); }
+    .leg-ring { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(100,130,210,0.8); }
+    .leg-band { width: 18px; height: 7px; border-radius: 2px; flex-shrink: 0; background: rgba(85,204,128,0.25); border: 1px solid rgba(85,204,128,0.35); }
+
+    /* detail panel, floats in right panel below legend */
+    #info-panel {
+      display: none; flex-direction: column; gap: 0;
+      overflow-y: auto; min-height: 0; flex-shrink: 1;
+      background: rgba(7,7,15,0.82); backdrop-filter: blur(20px);
+      border: 1px solid var(--border); border-radius: 14px;
+    }
+    #info-panel.show { display: flex; }
+    #info-panel::-webkit-scrollbar { width: 3px; }
+    #info-panel::-webkit-scrollbar-track { background: transparent; }
+    #info-panel::-webkit-scrollbar-thumb { background: rgba(100,130,210,0.2); border-radius: 2px; }
+
+    .ap-header {
+      padding: 10px 14px 8px;
+      display: flex; align-items: center; gap: 10px;
+      border-bottom: 1px solid var(--border);
+      position: relative; flex-shrink: 0;
+    }
+    .ap-close {
+      position: absolute; top: 9px; right: 10px;
+      background: none; border: none; color: rgba(255,255,255,0.2);
+      font-size: 12px; cursor: pointer; font-family: inherit; line-height: 1;
+      transition: color 0.15s;
+    }
+    .ap-close:hover { color: #fff; }
+    .ap-symbol {
+      font-size: 24px; font-weight: 700; color: var(--cyan);
+      line-height: 1; letter-spacing: -1px; min-width: 32px; text-align: center;
+    }
+    .ap-name-block { display: flex; flex-direction: column; gap: 2px; padding-top: 2px; padding-right: 14px; min-width: 0; }
+    .ap-el-name { font-size: 12px; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ap-cat { font-size: 7.5px; color: rgba(255,255,255,0.28); letter-spacing: 2px; text-transform: uppercase; }
+
+    .ap-action {
+      padding: 10px 14px; display: flex; align-items: center; gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .ap-action .btn { padding: 7px 12px; font-size: 10px; }
+    .ap-action-note { color: rgba(255,255,255,0.3); font-size: 8.5px; line-height: 1.5; }
+    .ap-note {
+      margin: 10px 14px 0; padding: 7px 10px; border-radius: 8px; font-size: 9px; line-height: 1.55;
+      background: rgba(255,170,0,0.07); border: 1px solid rgba(255,170,0,0.18); color: rgba(255,190,90,0.85);
+    }
+    .ap-note + .ap-col, .ap-note + .ap-action { margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.05); }
+
+    /* collapsible sections */
+    .ap-col { border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .ap-col:last-child { border-bottom: none; }
+    .ap-col-hd {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 6px 14px; cursor: pointer; user-select: none;
+      color: rgba(255,255,255,0.26); font-size: 7.5px; letter-spacing: 2.5px; text-transform: uppercase;
+      transition: color 0.15s;
+    }
+    .ap-col-hd:hover { color: rgba(255,255,255,0.55); }
+    .ap-col.open .ap-col-hd { color: rgba(255,255,255,0.50); }
+    .ap-chevron { font-size: 9px; transition: transform 0.18s; display: inline-block; opacity: 0.6; }
+    .ap-col.open .ap-chevron { transform: rotate(180deg); }
+    .ap-col-body { display: none; padding: 0 14px 8px; }
+    .ap-col.open .ap-col-body { display: block; }
+
+    .ap-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+    .ap-kv:last-child { margin-bottom: 0; }
+    .ap-k { color: rgba(255,255,255,0.30); font-size: 9.5px; flex-shrink: 0; }
+    .ap-v { font-size: 10px; font-weight: 600; color: #fff; text-align: right; }
+    .ap-v.pos { color: #ffaa00; }
+    .ap-v.neg { color: #6699ff; }
+    .ap-v.zero { color: rgba(255,255,255,0.4); }
+    .ap-v.cyan { color: var(--cyan); }
+    .ap-v.green { color: #55cc80; }
+
+    .ap-bond-row {
+      display: flex; align-items: center; gap: 7px;
+      padding: 4px 7px; border-radius: 7px; margin-bottom: 3px;
+      background: rgba(255,255,255,0.025);
+    }
+    .ap-bond-row:last-child { margin-bottom: 0; }
+    .ap-bond-row[data-go] { cursor: pointer; transition: background 0.15s; }
+    .ap-bond-row[data-go]:hover { background: rgba(100,130,210,0.12); }
+    .ap-bdot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+    .ap-bel { font-size: 10px; font-weight: 600; color: #fff; min-width: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ap-btype { color: rgba(255,255,255,0.28); font-size: 9px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ap-blen { color: rgba(255,255,255,0.38); font-size: 8.5px; flex-shrink: 0; }
+    .ap-empty { color: rgba(255,255,255,0.2); font-size: 9px; padding: 3px 0; line-height: 1.5; }
+    .ap-foot { color: rgba(255,255,255,0.2); font-size: 8px; line-height: 1.5; margin-top: 6px; }
+
+    /* bug report */
+    #bugreport-btn {
+      margin-left: auto; flex-shrink: 0;
+      padding: 8px 14px; border-radius: 10px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      color: rgba(255,255,255,0.45); cursor: pointer;
+      font-family: var(--font); font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+      transition: all 0.2s;
+    }
+    #bugreport-btn:hover { background: rgba(100,130,210,0.12); color: var(--cyan); border-color: rgba(100,130,210,0.3); }
+    #bugreport-panel {
+      display: none; position: absolute; top: 64px; right: 28px; z-index: 20; width: 260px;
+    }
+    #bugreport-panel.show { display: block; }
+    #bugreport-panel textarea {
+      width: 100%; min-height: 80px; resize: vertical; box-sizing: border-box;
+      margin-top: 8px; padding: 8px; border-radius: 7px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      color: #fff; font-family: var(--font); font-size: 11px;
+    }
+    #bugreport-send {
+      width: 100%; margin-top: 10px; padding: 8px; border-radius: 7px; cursor: pointer;
+      border: 1px solid rgba(100,130,210,0.3); background: rgba(100,130,210,0.12);
+      color: var(--cyan); font-family: var(--font); font-weight: 600; font-size: 11px;
+    }
+
+    /* settings + help */
+    #settings-btn, #help-btn {
+      position: absolute; bottom: 68px; z-index: 10;
+      width: 36px; height: 36px; border-radius: 10px;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      color: rgba(255,255,255,0.35); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s;
+    }
+    #settings-btn { right: 28px; font-size: 17px; }
+    #help-btn     { right: 72px; font-size: 15px; font-weight: 600; font-family: var(--font); }
+    #settings-btn:hover, #help-btn:hover { background: rgba(100,130,210,0.12); color: var(--cyan); border-color: rgba(100,130,210,0.3); }
+    #settings-panel, #help-panel {
+      display: none; position: absolute; bottom: 112px; z-index: 15;
+      max-height: calc(100vh - 190px); overflow-y: auto;
+    }
+    #settings-panel { right: 28px; width: 220px; }
+    #help-panel     { right: 72px; width: 250px; }
+    #settings-panel.show, #help-panel.show { display: block; }
+    #settings-panel::-webkit-scrollbar, #help-panel::-webkit-scrollbar { width: 3px; }
+    #settings-panel::-webkit-scrollbar-thumb, #help-panel::-webkit-scrollbar-thumb { background: rgba(100,130,210,0.2); border-radius: 2px; }
+    .help-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+    .help-key  { font-size: 9px; letter-spacing: 0.5px; color: var(--cyan); background: rgba(100,130,210,0.12); border: 1px solid rgba(100,130,210,0.25); border-radius: 5px; padding: 2px 6px; white-space: nowrap; flex-shrink: 0; }
+    .help-desc { color: rgba(255,255,255,0.55); font-size: 10px; }
+    .help-divider { border-top: 1px solid var(--border); margin: 10px 0; }
+    .help-hint { color: rgba(255,255,255,0.35); font-size: 9.5px; line-height: 1.6; }
+    .help-hint em { color: rgba(255,255,255,0.6); font-style: normal; }
+    .help-hint a { color: rgba(100,130,210,0.85); text-decoration: none; }
+    .help-hint a:hover { color: var(--cyan); }
+    .s-title { color: rgba(255,255,255,0.22); font-size: 8px; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 14px; }
+    .s-section { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+    .s-section:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .s-section.tight { margin-bottom: 10px; padding-bottom: 10px; }
+    .s-lbl { color: rgba(255,255,255,0.35); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+    .s-row { display: flex; justify-content: space-between; align-items: center; }
+    .s-row + .s-row { margin-top: 10px; }
+    .bg-swatches { display: flex; gap: 7px; }
+    .bg-swatch {
+      box-sizing: border-box; appearance: none; padding: 0; display: block;
+      width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
+      border: 2px solid transparent; transition: border-color 0.15s, transform 0.1s;
+    }
+    .bg-swatch:hover { transform: scale(1.1); border-color: rgba(255,255,255,0.3); }
+    .bg-swatch.active { border-color: var(--cyan); }
+    .bg-custom-wrap {
+      position: relative; width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
+      border: 2px solid transparent; transition: border-color 0.15s, transform 0.1s;
+      background: conic-gradient(red,yellow,lime,cyan,blue,magenta,red);
+      overflow: hidden;
+    }
+    .bg-custom-wrap:hover { transform: scale(1.1); border-color: rgba(255,255,255,0.3); }
+    .bg-custom-wrap.active { border-color: var(--cyan); }
+    .bg-custom {
+      position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; padding: 0; border: none;
+    }
+    .tog { position: relative; display: inline-flex; width: 34px; height: 18px; cursor: pointer; align-items: center; }
+    .tog input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .tog-track { width: 34px; height: 18px; border-radius: 9px; background: rgba(255,255,255,0.1); transition: background 0.2s; flex-shrink: 0; }
+    .tog-thumb { position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.45); transition: all 0.2s; pointer-events: none; }
+    .tog input:checked ~ .tog-track { background: rgba(100,130,210,0.5); }
+    .tog input:checked ~ .tog-thumb { left: 19px; background: var(--cyan); }
+    .tog input:focus-visible ~ .tog-track { outline: 1px solid var(--cyan); outline-offset: 2px; }
+    .s-range {
+      width: 100%; margin-top: 7px; -webkit-appearance: none; appearance: none;
+      height: 3px; border-radius: 2px; background: rgba(255,255,255,0.1); outline: none; cursor: pointer;
+    }
+    .s-range::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--cyan); cursor: pointer; }
+    .s-range::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%; background: var(--cyan); cursor: pointer; }
+
+    @media (max-width: 720px) {
+      #header { padding: 14px 16px; gap: 10px; }
+      #title, #bugreport-btn { display: none; }
+      #search-row { max-width: none; }
+      #right-panel, #right-panel.expanded { top: 62px; right: 16px; left: 16px; width: auto; max-height: 46vh; }
+      #leg-panel { display: none; }
+      #bd-compound { padding: 0 16px; overflow-x: auto; scrollbar-width: none; }
+      #settings-btn { right: 16px; }
+      #help-btn { right: 60px; }
+      #settings-panel { right: 16px; }
+      #help-panel { right: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #fade, #right-panel, .btn, .tog-track, .tog-thumb { transition: none; }
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <script>
+    window.addEventListener('error', e => {
+      const el = document.getElementById('loading')
+      if (el) { el.style.display = 'block'; el.textContent = 'Error: ' + (e.message || e.type) }
+    })
+    window.addEventListener('unhandledrejection', e => {
+      const el = document.getElementById('loading')
+      if (el) { el.style.display = 'block'; el.textContent = 'Error: ' + (e.reason?.message || e.reason || 'unknown') }
+    })
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three":         "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/webgpu":  "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.webgpu.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="app">
+
+  <div id="header">
+    <span id="title">Constellations</span>
+    <button id="back-btn" class="btn" title="Back to the sky (Esc)">← SKY</button>
+    <div id="search-row">
+      <input id="search-input" type="text" list="search-list" placeholder="Try Orion, Sirius, TRAPPIST-1, Earth" autocomplete="off" spellcheck="false" aria-label="Search constellations, stars and planets">
+      <button id="go-btn" class="btn">GO →</button>
+    </div>
+    <button id="bugreport-btn" title="Report a bug">Bug Report</button>
+  </div>
+  <datalist id="search-list"></datalist>
+
+  <div id="bugreport-panel" class="panel">
+    <div class="s-title">Bug Report</div>
+    <textarea id="bugreport-text" placeholder="Describe the bug..."></textarea>
+    <button id="bugreport-send">Send</button>
+  </div>
+
+  <div id="error" role="status"></div>
+  <div id="loading">LOADING STAR CATALOG</div>
+
+  <div id="canvas-wrap"></div>
+  <div id="labels"></div>
+  <div id="sel-ring"></div>
+  <div id="tip"></div>
+  <div id="fade"></div>
+
+  <div id="right-panel">
+    <div class="panel" id="leg-panel"></div>
+    <div id="info-panel">
+      <div class="ap-header">
+        <div class="ap-symbol" id="ip-sym">—</div>
+        <div class="ap-name-block">
+          <div class="ap-el-name" id="ip-name">—</div>
+          <div class="ap-cat" id="ip-cat">—</div>
+        </div>
+        <button class="ap-close" id="ip-close" title="Close (Esc)">✕</button>
+      </div>
+      <div id="ip-content"></div>
+    </div>
+  </div>
+
+  <div id="bottom-drawer">
+    <div id="bd-compound">
+      <div class="bd-stats-row" id="bd-stats"></div>
+      <div class="bd-chem-row" id="bd-chem-row"></div>
+    </div>
+  </div>
+
+  <button id="settings-btn" title="Settings">&#x2699;</button>
+
+  <div id="settings-panel" class="panel">
+    <div class="s-title">Settings</div>
+    <div class="s-section">
+      <div class="s-lbl">Background</div>
+      <div class="bg-swatches">
+        <button class="bg-swatch active" data-bg="#07070f" style="background:linear-gradient(145deg,#28285a,#07070f)" title="Dark Navy"></button>
+        <button class="bg-swatch" data-bg="#000000" style="background:linear-gradient(145deg,#383838,#000000)" title="Black"></button>
+        <button class="bg-swatch" data-bg="#050a1c" style="background:linear-gradient(145deg,#143080,#050a1c)" title="Midnight Blue"></button>
+        <button class="bg-swatch" data-bg="#0d0420" style="background:linear-gradient(145deg,#3d1068,#0d0420)" title="Deep Purple"></button>
+        <button class="bg-swatch" data-bg="#080f08" style="background:linear-gradient(145deg,#153815,#080f08)" title="Dark Forest"></button>
+        <div class="bg-custom-wrap" id="bg-custom-wrap" title="Custom color">
+          <input type="color" class="bg-custom" id="bg-custom-picker" value="#07070f">
+        </div>
+      </div>
+    </div>
+    <div class="s-section tight">
+      <div class="s-lbl">Sky</div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">Figures</span><label class="tog"><input type="checkbox" data-set="lines"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">Boundaries</span><label class="tog"><input type="checkbox" data-set="bounds"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">Labels</span><label class="tog"><input type="checkbox" data-set="labels"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">Milky Way</span><label class="tog"><input type="checkbox" data-set="milky"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">Planet hosts</span><label class="tog"><input type="checkbox" data-set="hosts"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-row"><span class="s-lbl" style="margin:0">RA/Dec grid</span><label class="tog"><input type="checkbox" data-set="grid"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+    </div>
+    <div class="s-section tight">
+      <div class="s-lbl">Systems</div>
+      <div class="s-row" title="For stars with no confirmed planets, show a clearly labelled simulated system"><span class="s-lbl" style="margin:0">Simulated planets</span><label class="tog"><input type="checkbox" data-set="sim"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
+      <div class="s-lbl" style="margin-top:12px">Orbit Speed</div>
+      <input type="range" class="s-range" data-set="orbit" min="1" max="51">
+    </div>
+    <div class="s-section tight">
+      <div class="s-row">
+        <span class="s-lbl" style="margin:0">Dot Grid</span>
+        <label class="tog"><input type="checkbox" data-set="dots"><div class="tog-track"></div><div class="tog-thumb"></div></label>
+      </div>
+      <div class="s-row">
+        <span class="s-lbl" style="margin:0">Auto-rotate</span>
+        <label class="tog"><input type="checkbox" data-set="rotate"><div class="tog-track"></div><div class="tog-thumb"></div></label>
+      </div>
+    </div>
+    <div class="s-section">
+      <div class="s-lbl">Rotation Speed</div>
+      <input type="range" class="s-range" data-set="speed" min="1" max="51">
+    </div>
+  </div>
+
+  <button id="help-btn" title="Controls">?</button>
+
+  <div id="help-panel" class="panel">
+    <div class="s-title">Controls</div>
+    <div class="help-row"><span class="help-key">Drag</span><span class="help-desc">Look around / orbit</span></div>
+    <div class="help-row"><span class="help-key">Scroll</span><span class="help-desc">Zoom in &amp; out</span></div>
+    <div class="help-row"><span class="help-key">Click star</span><span class="help-desc">Star info, click again to fly in</span></div>
+    <div class="help-row"><span class="help-key">Click sky</span><span class="help-desc">Select that constellation</span></div>
+    <div class="help-row"><span class="help-key">Click planet</span><span class="help-desc">Planet info + follow</span></div>
+    <div class="help-row"><span class="help-key">Enter</span><span class="help-desc">Fly into selected system</span></div>
+    <div class="help-row"><span class="help-key">Esc</span><span class="help-desc">Close / back to the sky</span></div>
+    <div class="help-row"><span class="help-key">R</span><span class="help-desc">Reset view</span></div>
+    <div class="help-row"><span class="help-key">/</span><span class="help-desc">Search</span></div>
+    <div class="help-divider"></div>
+    <div class="s-lbl" style="margin-bottom:6px">Find anything</div>
+    <div class="help-hint">Type a constellation <em>Orion</em>, a star <em>Betelgeuse</em>, <em>alpha centauri</em>, <em>HIP 27989</em>, a planet host <em>TRAPPIST-1</em>, or a planet <em>Kepler-22 b</em>, then press Enter.</div>
+    <div class="help-divider"></div>
+    <div class="s-lbl" style="margin-bottom:6px">Data</div>
+    <div class="help-hint" id="data-credits">Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a>. Figures &amp; IAU boundaries: <a href="https://github.com/Stellarium/stellarium" target="_blank" rel="noopener">Stellarium</a>. Planets: <a href="https://exoplanetarchive.ipac.caltech.edu" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Values marked ~ are estimates.</div>
+  </div>
+
+</div>
+<script src="data.js" defer></script>
+<script type="module">
+import * as THREE from 'three/webgpu';
+const { color, float, vec3, uv, mix, sin, smoothstep, uniform, positionLocal, normalView, normalWorld, positionWorld, cameraPosition, Fn, mx_fractal_noise_float, timerLocal } = THREE;
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+if (!window.SKY) await new Promise(r => window.addEventListener('DOMContentLoaded', r, { once: true }))
+if (!window.SKY) throw new Error('Star catalog (data.js) failed to load')
+const D = window.SKY
+
+// Constants + helpers
+const DEG = Math.PI / 180
+const SKY_R = 100, MW_R = 400
+const PC_LY = 3.26156
+const AU_PER_RSUN = 0.00465047
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x))
+const lerp  = (a, b, t) => a + (b - a) * t
+const ease  = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+const esc   = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
+const $     = id => document.getElementById(id)
+
+// Equatorial (J2000) to scene: +y is the north celestial pole, RA 0h is +x, RA increases to the east (-z),
+// so the sky reads correctly from inside the sphere.
+function dirOf(ra, dec, out = new THREE.Vector3()) {
+  const a = ra * DEG, d = dec * DEG
+  return out.set(Math.cos(d) * Math.cos(a), Math.sin(d), -Math.cos(d) * Math.sin(a))
+}
+function radecOf(v) {
+  return { ra: ((Math.atan2(-v.z, v.x) / DEG) + 360) % 360, dec: Math.asin(clamp(v.y, -1, 1)) / DEG }
+}
+
+function fmtN(v, d = 0) {
+  if (v == null || !isFinite(v)) return '—'
+  return Number(v).toLocaleString('en-US', { maximumFractionDigits: d })
+}
+function fmtSig(v, n = 3) {
+  if (v == null || !isFinite(v)) return '—'
+  if (v === 0) return '0'
+  const d = clamp(n - 1 - Math.floor(Math.log10(Math.abs(v))), 0, 6)
+  return Number(v).toLocaleString('en-US', { maximumFractionDigits: d })
+}
+function fmtLy(pc) {
+  if (pc == null) return '—'
+  const ly = pc * PC_LY
+  return `${fmtN(ly, ly < 10 ? 2 : ly < 100 ? 1 : 0)} ly`
+}
+function fmtRA(ra) {
+  let s = Math.round(ra / 15 * 3600)
+  const h = Math.floor(s / 3600) % 24, m = Math.floor(s % 3600 / 60); s = s % 60
+  return `${String(h).padStart(2,'0')}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`
+}
+function fmtDec(dec) {
+  let s = Math.round(Math.abs(dec) * 3600)
+  const d = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s = s % 60
+  return `${dec < 0 ? '−' : '+'}${String(d).padStart(2,'0')}° ${String(m).padStart(2,'0')}′ ${String(s).padStart(2,'0')}″`
+}
+function fmtPeriod(days) {
+  if (days == null) return '—'
+  if (days < 2) return `${fmtSig(days * 24, 3)} hours`
+  if (days < 730) return `${fmtSig(days, 4)} days`
+  return `${fmtSig(days / 365.25, 3)} years`
+}
+const est = (flag) => flag ? '~' : ''
+
+// Blackbody colour (sRGB) for a temperature in K
+function bbColor(t) {
+  const k = clamp(t, 1000, 40000) / 100
+  const r = k <= 66 ? 255 : 329.698727446 * Math.pow(k - 60, -0.1332047592)
+  const g = k <= 66 ? 99.4708025861 * Math.log(k) - 161.1195681661 : 288.1221695283 * Math.pow(k - 60, -0.0755148492)
+  const b = k >= 66 ? 255 : k <= 19 ? 0 : 138.5177312231 * Math.log(k - 10) - 305.0447927307
+  return new THREE.Color().setRGB(clamp(r, 0, 255) / 255, clamp(g, 0, 255) / 255, clamp(b, 0, 255) / 255, THREE.SRGBColorSpace)
+}
+const WHITE = new THREE.Color(1, 1, 1)
+const starTint = t => bbColor(t).lerp(WHITE, 0.22)
+const cssColor = c => '#' + c.getHexString()
+
+function colourWord(t) {
+  return t > 25000 ? 'Blue' : t > 10000 ? 'Blue-white' : t > 7500 ? 'White' : t > 6000 ? 'Yellow-white' : t > 5200 ? 'Yellow' : t > 3700 ? 'Orange' : 'Red'
+}
+function starClass(spect, teff) {
+  const s = spect || ''
+  if (/^(sd)?D[ABOQZCX]?\d/.test(s)) return 'White dwarf'
+  const m = s.match(/[OBAFGKM]\d*(?:\.\d+)?\s*:?\s*(Iab|Ia|Ib|III|II|IV|I|VI|V)/)
+  const lc = m ? m[1] : (/^sd/.test(s) ? 'VI' : null)
+  const kind = { Iab:'supergiant', Ia:'supergiant', Ib:'supergiant', I:'supergiant', II:'bright giant', III:'giant', IV:'subgiant', V:'main-sequence star', VI:'subdwarf' }[lc] ?? 'star'
+  return `${colourWord(teff)} ${kind}`
+}
+
+// Archive host names use Bayer abbreviations ("bet Gem b"); show them as Greek letters
+const GREEK_ABBR = { alf:'α', alp:'α', bet:'β', gam:'γ', del:'δ', eps:'ε', zet:'ζ', eta:'η', tet:'θ', the:'θ', iot:'ι', kap:'κ', lam:'λ', mu:'μ', nu:'ν', ksi:'ξ', xi:'ξ', omi:'ο', pi:'π', rho:'ρ', sig:'σ', tau:'τ', ups:'υ', phi:'φ', chi:'χ', khi:'χ', psi:'ψ', ome:'ω' }
+const GREEK_WORDS = { alpha:'α', beta:'β', gamma:'γ', delta:'δ', epsilon:'ε', zeta:'ζ', eta:'η', theta:'θ', iota:'ι', kappa:'κ', lambda:'λ', mu:'μ', nu:'ν', xi:'ξ', omicron:'ο', pi:'π', rho:'ρ', sigma:'σ', tau:'τ', upsilon:'υ', phi:'φ', chi:'χ', psi:'ψ', omega:'ω', ...GREEK_ABBR }
+function prettyName(s) {
+  return s.replace(/^([a-z]{2,3})(\d*) (?=[A-Z][A-Za-z]{1,2}\b)/, (m, g, n) => GREEK_ABBR[g] ? GREEK_ABBR[g] + (n ? n.replace(/\d/g, d => '⁰¹²³⁴⁵⁶⁷⁸⁹'[d]) : '') + ' ' : m)
+}
+
+// Catalog
+const CONS = D.cons.map((c, i) => ({ ...c, i, dir: new THREE.Vector3() }))
+const STARS = D.stars.map((r, i) => ({
+  i, hip: r[0], ra: r[1], dec: r[2], mag: r[3], ci: r[4], dist: r[5], spect: r[6], name: r[7], greek: r[8],
+  flam: r[9], con: r[10], hd: r[11], hr: r[12], teff: r[13], lum: r[14], rad: r[15], sys: r[16],
+  dir: dirOf(r[1], r[2]),
+}))
+const SYSTEMS = D.systems.map((r, i) => ({
+  i, host: r[0], hip: r[1], ra: r[2], dec: r[3], dist: r[4], vmag: r[5], spect: r[6], teff: r[7], rad: r[8],
+  mass: r[9], lum: r[10], snum: r[11], con: r[12], star: r[13], dir: dirOf(r[2], r[3]),
+  planets: r[14].map(p => ({ name: p[0], a: p[1], per: p[2], e: p[3], r: p[4], m: p[5], msini: p[6], teq: p[7],
+    insol: p[8], year: p[9], method: D.methods[p[10]], facility: D.facilities[p[11]], flags: p[12] })),
+}))
+const FAINT_HOSTS = SYSTEMS.filter(s => s.star < 0)
+
+// Label anchor: mean of the figure, unless that lands outside the constellation (Serpens is in two parts)
+const ALPHA = new Int16Array(128).fill(-1)
+for (let i = 0; i < D.alphabet.length; i++) ALPHA[D.alphabet.charCodeAt(i)] = i
+function conAt(v) {
+  const { ra, dec } = radecOf(v)
+  const row = clamp(Math.floor(dec + 90), 0, 179), col = clamp(Math.floor(ra), 0, 359)
+  return ALPHA[D.grid.charCodeAt(row * 360 + col)]
+}
+for (const c of CONS) {
+  const mean = (idx) => idx.reduce((acc, i) => acc.add(STARS[i].dir), new THREE.Vector3()).normalize()
+  c.dir.copy(mean([...new Set(c.lines.flat())]))
+  if (conAt(c.dir) !== c.i) c.dir.copy(mean([...c.lines].sort((a, b) => b.length - a.length)[0]))
+  c.members = STARS.filter(s => s.con === c.i).sort((a, b) => a.mag - b.mag)
+  c.systems = SYSTEMS.filter(s => s.con === c.i).sort((a, b) => (a.dist ?? 1e9) - (b.dist ?? 1e9))
+  c.radius = Math.max(...c.lines.flat().map(i => STARS[i].dir.angleTo(c.dir))) // radians
+}
+
+function desig(s) {
+  const ab = CONS[s.con].abbr
+  if (s.greek) return `${s.greek} ${ab}`
+  if (s.flam) return `${s.flam} ${ab}`
+  if (s.hd) return `HD ${s.hd}`
+  return `HIP ${s.hip}`
+}
+function longDesig(s) {
+  const c = CONS[s.con]
+  if (s.greek) return `${s.greek} ${c.gen}`
+  if (s.flam) return `${s.flam} ${c.gen}`
+  return desig(s)
+}
+const starTitle = s => s.name || desig(s)
+const sysTitle  = sy => sy.star >= 0 ? starTitle(STARS[sy.star]) : prettyName(sy.host)
+
+// The Sun and its planets (NASA planetary fact sheet). Temperatures are mean surface / 1 bar values.
+const SOL = {
+  host: 'Sun', title: 'Solar System', spect: 'G2V', teff: 5772, rad: 1, mass: 1, lum: 1, dist: 0,
+  planets: [
+    { name:'Mercury', a:0.387, per:87.97,  e:0.2056, r:0.383, m:0.0553, teq:440, year:null, look:{ s:'noise', c1:0x5f5a55, c2:0xb9b1a6 } },
+    { name:'Venus',   a:0.723, per:224.70, e:0.0068, r:0.949, m:0.815,  teq:737, year:null, look:{ s:'noise', c1:0xb48a4e, c2:0xf0dcaa, f:1.4 } },
+    { name:'Earth',   a:1.000, per:365.26, e:0.0167, r:1.000, m:1.000,  teq:288, year:null, look:{ s:'earth' } },
+    { name:'Mars',    a:1.524, per:686.98, e:0.0934, r:0.532, m:0.107,  teq:210, year:null, look:{ s:'noise', c1:0x7a3018, c2:0xd77a48 } },
+    { name:'Jupiter', a:5.203, per:4332.6, e:0.0489, r:11.21, m:317.8,  teq:165, year:null, look:{ s:'bands', c1:0x9c6c45, c2:0xf0dfc4, f:13 } },
+    { name:'Saturn',  a:9.537, per:10759,  e:0.0565, r:9.45,  m:95.2,   teq:134, year:null, look:{ s:'bands', c1:0xb99a62, c2:0xf2e3b8, f:16 }, ring:true },
+    { name:'Uranus',  a:19.19, per:30685,  e:0.0457, r:4.01,  m:14.5,   teq:76,  year:null, look:{ s:'bands', c1:0x86c9d2, c2:0xb4e6ec, f:6 } },
+    { name:'Neptune', a:30.07, per:60190,  e:0.0113, r:3.88,  m:17.1,   teq:72,  year:null, look:{ s:'bands', c1:0x3048c0, c2:0x6d8cf2, f:7 } },
+  ],
+}
+
+// Planet classes (legend colours double as base colours)
+const KIND = {
+  rocky:   { label: 'Rocky',         css: '#c08a5e' },
+  super:   { label: 'Super-Earth',   css: '#6fb3a2' },
+  neptune: { label: 'Neptune-like',  css: '#6f8ff0' },
+  giant:   { label: 'Gas giant',     css: '#d8b48a' },
+  hot:     { label: 'Hot Jupiter',   css: '#ff7a45' },
+}
+function planetKind(p) {
+  const R = p.r ?? 3
+  if (R >= 6) return (p.teq ?? 0) > 1000 || p.a < 0.1 ? 'hot' : 'giant'
+  if (R >= 2) return 'neptune'
+  if (R >= 1.25) return 'super'
+  return 'rocky'
+}
+const hzOf = L => [Math.sqrt(L / 1.1), Math.sqrt(L / 0.53)] // conservative habitable zone, AU
+
+// Renderer (same WebGPU-first setup as the molecule viewer)
+const wrap   = $('canvas-wrap')
+const scene  = new THREE.Scene()
+scene.background = null
+
+const camera = new THREE.PerspectiveCamera(60, wrap.clientWidth / wrap.clientHeight, 0.01, 2000)
+
+const loadEl = $('loading')
+function log(msg) { loadEl.textContent = msg }
+
+async function createRenderer() {
+  const make = forceWebGL => {
+    const r = new THREE.WebGPURenderer({ antialias: true, alpha: true, forceWebGL })
+    r.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    r.setSize(wrap.clientWidth, wrap.clientHeight)
+    r.setClearColor(0x000000, 0)
+    return r
+  }
+  if (navigator.gpu) {
+    const adapter = await navigator.gpu.requestAdapter().catch(() => null)
+    if (adapter) {
+      try {
+        log('INIT WEBGPU...')
+        const r = make(false); wrap.appendChild(r.domElement); await r.init(); return r
+      } catch (e) { wrap.innerHTML = '' }
+    }
+  }
+  log('INIT WEBGL2...')
+  const r = make(true); wrap.appendChild(r.domElement); await r.init(); return r
+}
+
+const renderer = await createRenderer()
+const canvas = renderer.domElement
+loadEl.style.display = 'none'
+
+const controls = new OrbitControls(camera, canvas)
+controls.enableDamping   = true
+controls.dampingFactor   = 0.07
+controls.autoRotate      = false
+controls.autoRotateSpeed = 1.2
+
+// TSL fresnel rim glow
+const fresnel = Fn(() => {
+  const v = cameraPosition.sub(positionWorld).normalize()
+  return float(1.0).sub(normalWorld.dot(v).saturate()).pow(float(3.0))
+})
+
+// Sky
+const skyGroup = new THREE.Group()
+scene.add(skyGroup)
+
+const uSkyDim = uniform(1.0)
+const uFovK   = uniform(1.0)
+
+// Stars: camera-facing quads (they all face the centre, where the camera sits), soft core + halo
+const starMat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+{
+  const d = uv().sub(0.5).length().mul(2)
+  const core = d.mul(d).mul(-22).exp()
+  const halo = d.mul(-6).exp().mul(0.3)
+  starMat.colorNode   = vec3(1.0)
+  starMat.opacityNode = core.add(halo).mul(smoothstep(0.8, 1.0, d).oneMinus()).mul(uSkyDim)
+}
+const quad = new THREE.PlaneGeometry(1, 1)
+
+function starAngle(mag) { // quad size, radians
+  const f = clamp((6.8 - mag) / 8.3, 0, 1)
+  return (0.42 + 2.2 * Math.pow(f, 1.45)) * DEG
+}
+function starGain(mag) {
+  return 0.34 + 0.9 * Math.pow(clamp((6.8 - mag) / 8.3, 0, 1), 1.0)
+}
+
+const starMesh = new THREE.InstancedMesh(quad, starMat, STARS.length)
+starMesh.frustumCulled = false
+starMesh.renderOrder = 2
+STARS.forEach((s, i) => starMesh.setColorAt(i, starTint(s.teff).multiplyScalar(starGain(s.mag))))
+skyGroup.add(starMesh)
+
+// Faint planet hosts (below naked-eye): small dots, plus a ring on every host
+const hostDotMesh = new THREE.InstancedMesh(quad, starMat, FAINT_HOSTS.length)
+hostDotMesh.frustumCulled = false
+hostDotMesh.renderOrder = 2
+const hostDotColor = new THREE.Color(0.55, 0.66, 1.0).multiplyScalar(0.4)
+FAINT_HOSTS.forEach((s, i) => hostDotMesh.setColorAt(i, hostDotColor))
+skyGroup.add(hostDotMesh)
+
+const ringMat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+{
+  const d = uv().sub(0.5).length().mul(2)
+  ringMat.colorNode   = vec3(1.0) // instance colour carries strength: naked-eye hosts bright, faint hosts dim
+  ringMat.opacityNode = smoothstep(0.64, 0.72, d).mul(smoothstep(0.78, 0.86, d).oneMinus()).mul(uSkyDim)
+}
+const ringMesh = new THREE.InstancedMesh(quad, ringMat, SYSTEMS.length)
+ringMesh.frustumCulled = false
+ringMesh.renderOrder = 3
+const _ringC = new THREE.Color(0x6482d2)
+SYSTEMS.forEach((s, i) => ringMesh.setColorAt(i, _ringC.clone().multiplyScalar(s.star >= 0 ? 0.9 : 0.22)))
+skyGroup.add(ringMesh)
+
+const _dummy = new THREE.Object3D()
+function placeQuad(mesh, i, dir, size) {
+  _dummy.position.copy(dir).multiplyScalar(SKY_R)
+  _dummy.lookAt(0, 0, 0)
+  _dummy.scale.setScalar(size)
+  _dummy.updateMatrix()
+  mesh.setMatrixAt(i, _dummy.matrix)
+}
+let _scaledFov = -1
+function updateStarScales() {
+  const k = Math.pow(camera.fov / 60, 0.8)
+  if (Math.abs(k - _scaledFov) < 0.002) return
+  _scaledFov = k
+  STARS.forEach((s, i) => placeQuad(starMesh, i, s.dir, SKY_R * starAngle(s.mag) * k))
+  FAINT_HOSTS.forEach((s, i) => placeQuad(hostDotMesh, i, s.dir, SKY_R * 0.36 * DEG * k))
+  SYSTEMS.forEach((s, i) => {
+    const a = s.star >= 0 ? Math.max(1.0 * DEG, starAngle(STARS[s.star].mag) * 0.55) : 0.5 * DEG
+    placeQuad(ringMesh, i, s.dir, SKY_R * a * k)
+  })
+  starMesh.instanceMatrix.needsUpdate = true
+  hostDotMesh.instanceMatrix.needsUpdate = true
+  ringMesh.instanceMatrix.needsUpdate = true
+}
+
+// Constellation figures: one object per constellation so highlight is a material swap.
+// Segments stop just short of each star so the stars stay crisp.
+const lineMats = {
+  base:  new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.30, depthWrite: false }),
+  hover: new THREE.LineBasicNodeMaterial({ color: 0x8aa4ec, transparent: true, opacity: 0.62, depthWrite: false }),
+  sel:   new THREE.LineBasicNodeMaterial({ color: 0xa9bdf5, transparent: true, opacity: 0.95, depthWrite: false }),
+}
+const figureGroup = new THREE.Group()
+skyGroup.add(figureGroup)
+const figures = CONS.map(c => {
+  const pts = []
+  for (const line of c.lines) {
+    for (let k = 0; k < line.length - 1; k++) {
+      const a = STARS[line[k]].dir, b = STARS[line[k + 1]].dir
+      const ang = a.angleTo(b)
+      const ga = Math.min(starAngle(STARS[line[k]].mag) * 0.32, ang * 0.3) / ang
+      const gb = Math.min(starAngle(STARS[line[k + 1]].mag) * 0.32, ang * 0.3) / ang
+      pts.push(a.clone().lerp(b, ga).normalize().multiplyScalar(SKY_R * 0.999),
+               a.clone().lerp(b, 1 - gb).normalize().multiplyScalar(SKY_R * 0.999))
+    }
+  }
+  const seg = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMats.base)
+  seg.renderOrder = 1
+  seg.frustumCulled = false
+  figureGroup.add(seg)
+  return seg
+})
+
+// IAU boundaries (precessed to J2000 at build time)
+const boundMat    = new THREE.LineBasicNodeMaterial({ color: 0xffffff, transparent: true, opacity: 0.06, depthWrite: false })
+const boundSelMat = new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.55, depthWrite: false })
+function boundaryPoints(filter) {
+  const pts = []
+  for (const [a, b, flat] of D.bounds) {
+    if (filter && !filter(a, b)) continue
+    for (let k = 0; k < flat.length - 2; k += 2) {
+      pts.push(dirOf(flat[k], flat[k + 1]).multiplyScalar(SKY_R * 0.998), dirOf(flat[k + 2], flat[k + 3]).multiplyScalar(SKY_R * 0.998))
+    }
+  }
+  return new THREE.BufferGeometry().setFromPoints(pts)
+}
+const boundLines = new THREE.LineSegments(boundaryPoints(), boundMat)
+boundLines.frustumCulled = false
+skyGroup.add(boundLines)
+const boundSel = new THREE.LineSegments(new THREE.BufferGeometry(), boundSelMat)
+boundSel.visible = false
+boundSel.frustumCulled = false
+skyGroup.add(boundSel)
+
+// RA/Dec grid
+const gridLines = (() => {
+  const pts = []
+  for (let dec = -75; dec <= 75; dec += 15)
+    for (let ra = 0; ra < 360; ra += 3) pts.push(dirOf(ra, dec).multiplyScalar(SKY_R * 0.997), dirOf(ra + 3, dec).multiplyScalar(SKY_R * 0.997))
+  for (let ra = 0; ra < 360; ra += 15)
+    for (let dec = -87; dec < 87; dec += 3) pts.push(dirOf(ra, dec).multiplyScalar(SKY_R * 0.997), dirOf(ra, dec + 3).multiplyScalar(SKY_R * 0.997))
+  const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.09, depthWrite: false }))
+  l.frustumCulled = false
+  skyGroup.add(l)
+  return l
+})()
+
+// Milky Way: procedural band around the galactic equator, brighter and wider toward the centre in Sagittarius
+const milky = (() => {
+  const ngp = uniform(dirOf(192.85948, 27.12825))
+  const gc  = uniform(dirOf(266.40499, -28.93617))
+  const mat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+  const d = positionLocal.normalize()
+  const sb = d.dot(ngp)
+  const centre = d.dot(gc).max(0).pow(3)
+  const width = float(0.085).add(centre.mul(0.11))
+  const band = sb.div(width).pow(2).negate().exp()
+  const clouds = mx_fractal_noise_float(d.mul(4.0), 4, 2.0, 0.5).mul(0.5).add(0.55).saturate()
+  const lanes = smoothstep(0.0, 0.5, mx_fractal_noise_float(d.mul(9.0).add(7.3), 3, 2.0, 0.5).add(0.35)).mul(0.65).add(0.35)
+  const glow = band.mul(clouds).mul(lanes).mul(centre.mul(1.4).add(0.45))
+  mat.colorNode = mix(color(0x5566a8), color(0xc9b896), centre).mul(glow).mul(0.3).mul(uSkyDim)
+  mat.opacityNode = float(1.0)
+  const m = new THREE.Mesh(new THREE.SphereGeometry(MW_R, 96, 48), mat)
+  m.renderOrder = -1
+  m.frustumCulled = false
+  skyGroup.add(m)
+  return m
+})()
+
+// System view
+const sysGroup = new THREE.Group()
+sysGroup.visible = false
+scene.add(sysGroup)
+sysGroup.add(new THREE.HemisphereLight(0x9fb2ff, 0x121225, 0.6))
+const starLight = new THREE.PointLight(0xffffff, 3.2, 0, 0)
+sysGroup.add(starLight)
+
+const uStarColor = uniform(new THREE.Color(1, 1, 1))
+const starSurface = (() => {
+  const mat = new THREE.MeshBasicNodeMaterial()
+  const p = positionLocal.normalize()
+  const gran = mx_fractal_noise_float(p.mul(7.0).add(timerLocal(0.04)), 3, 2.0, 0.5).mul(0.5).add(0.5)
+  const limb = normalView.z.max(0).pow(0.45)
+  mat.colorNode = uStarColor.mul(gran.mul(0.32).add(0.72)).mul(limb.mul(0.5).add(0.5)) // stays below 1 so the colour survives
+  return mat
+})()
+const glowMat = (() => {
+  const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+  const d = uv().sub(0.5).length().mul(2)
+  mat.colorNode = uStarColor
+  mat.opacityNode = d.oneMinus().saturate().pow(2.6).mul(0.9)
+  return mat
+})()
+const coronaMat = (() => {
+  const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+  const d = uv().sub(0.5).length().mul(2)
+  mat.colorNode = uStarColor
+  mat.opacityNode = d.oneMinus().saturate().pow(4.0).mul(0.22)
+  return mat
+})()
+const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), starSurface)
+const sunGlow = new THREE.Sprite(glowMat)
+const sunCorona = new THREE.Sprite(coronaMat)
+sunGlow.renderOrder = 5; sunCorona.renderOrder = 4
+sysGroup.add(sunMesh, sunGlow, sunCorona)
+
+const orbitMat    = new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.26, depthWrite: false })
+const orbitSelMat = new THREE.LineBasicNodeMaterial({ color: 0xa9bdf5, transparent: true, opacity: 0.85, depthWrite: false })
+const hzMat = new THREE.MeshBasicNodeMaterial({ color: 0x55cc80, transparent: true, opacity: 0.075, depthWrite: false, side: THREE.DoubleSide })
+const hzEdgeMat = new THREE.LineBasicNodeMaterial({ color: 0x55cc80, transparent: true, opacity: 0.22, depthWrite: false })
+
+function planetMaterial(p, seed) {
+  const look = p.look ?? autoLook(p)
+  const mat = new THREE.MeshStandardNodeMaterial()
+  const q = positionLocal.normalize()
+  const off = vec3(seed * 13.1, seed * 7.7, seed * 3.3)
+  let col
+  if (look.s === 'earth') {
+    const n = mx_fractal_noise_float(q.mul(2.2).add(off), 5, 2.0, 0.5)
+    const land = smoothstep(0.04, 0.1, n)
+    const base = mix(color(0x1d4f8c), mix(color(0x4f7d3a), color(0x9b8a5e), smoothstep(0.15, 0.45, n)), land)
+    const ice = smoothstep(0.8, 0.9, q.y.abs())
+    const cloud = smoothstep(0.25, 0.6, mx_fractal_noise_float(q.mul(3.4).add(off).add(9.0), 4, 2.0, 0.5)).mul(0.55)
+    col = mix(mix(base, color(0xeef4ff), ice), color(0xffffff), cloud)
+  } else if (look.s === 'bands') {
+    const n = mx_fractal_noise_float(q.mul(3.0).add(off), 3, 2.0, 0.5)
+    const t = sin(q.y.mul(look.f ?? 12).add(n.mul(1.8))).mul(0.5).add(0.5)
+    col = mix(color(look.c1), color(look.c2), t)
+  } else {
+    const n = mx_fractal_noise_float(q.mul(look.f ?? 2.6).add(off), 4, 2.0, 0.5).mul(0.5).add(0.5)
+    col = mix(color(look.c1), color(look.c2), smoothstep(0.25, 0.75, n))
+  }
+  mat.colorNode = col
+  mat.roughnessNode = float(0.85)
+  mat.metalnessNode = float(0.0)
+  let em = color(look.rim ?? 0x6482d2).mul(fresnel()).mul(float(0.45))
+  if (look.hot) em = em.add(col.mul(look.hot))
+  mat.emissiveNode = em
+  return mat
+}
+function autoLook(p) {
+  const t = p.teq ?? 300
+  switch (p.kind) {
+    case 'hot':     return { s:'bands', c1:0x6e2414, c2:0xff8a4a, f:10, hot:0.35, rim:0xff8a4a }
+    case 'giant':   return t < 200 ? { s:'bands', c1:0x8a9cc0, c2:0xe2e6ee, f:12 } : { s:'bands', c1:0xa8774f, c2:0xeedcbc, f:14 }
+    case 'neptune': return t > 700 ? { s:'bands', c1:0x6a4a8c, c2:0xb48ad8, f:7, hot:0.12 } : { s:'bands', c1:0x3f63d0, c2:0x8fb2f5, f:7 }
+    case 'super':   return t > 700 ? { s:'noise', c1:0x3a1a12, c2:0xff6a30, hot:0.3, rim:0xff6a30 } : { s:'noise', c1:0x2f6d66, c2:0xa9d6c4 }
+    default:
+      if (t > 700) return { s:'noise', c1:0x2c1610, c2:0xff6a30, hot:0.3, rim:0xff6a30 }
+      if (t >= 180 && t <= 330) return { s:'earth' }
+      if (t < 180) return { s:'noise', c1:0x8b98a8, c2:0xe6edf5 }
+      return { s:'noise', c1:0x6e4f3a, c2:0xcfa47a }
+  }
+}
+
+function saturnRing(pr) {
+  const inner = pr * 1.3, outer = pr * 2.3
+  const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  const t = positionLocal.xy.length().sub(inner).div(outer - inner)
+  mat.colorNode = mix(color(0x8c7a5c), color(0xe0cfa6), sin(t.mul(60.0)).mul(0.5).add(0.5))
+  mat.opacityNode = sin(t.mul(23.0)).mul(0.2).add(0.65).mul(smoothstep(0.0, 0.06, t)).mul(smoothstep(0.92, 1.0, t).oneMinus())
+  mat.userData.own = true
+  const m = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 96, 1), mat)
+  m.rotation.x = -Math.PI / 2 + 26.7 * DEG
+  return m
+}
+
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0
+    let t = Math.imul(a ^ a >>> 15, 1 | a)
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
+}
+
+// Piecewise-log orbit scale: real ordering and spacing ratios, compressed so Mercury and Neptune fit one view
+function makeScale(as, rs) {
+  const R0 = rs + 1.15, K = 2.4, GAP = 0.8
+  const knots = []
+  for (const a of as) {
+    if (!knots.length) { knots.push([a, R0]); continue }
+    const [pa, pr] = knots[knots.length - 1]
+    if (a <= pa) continue
+    knots.push([a, Math.max(pr + K * Math.log2(a / pa), pr + GAP)])
+  }
+  const last = knots[knots.length - 1]
+  return a => {
+    if (a <= knots[0][0]) return Math.max(rs + 0.25, knots[0][1] + K * Math.log2(a / knots[0][0]))
+    for (let i = 0; i < knots.length - 1; i++) {
+      const [a0, r0] = knots[i], [a1, r1] = knots[i + 1]
+      if (a <= a1) return lerp(r0, r1, Math.log(a / a0) / Math.log(a1 / a0))
+    }
+    return Math.min(last[1] + K * Math.log2(a / last[0]), last[1] + 9)
+  }
+}
+
+// System model: confirmed planets, the Solar System, or a labelled simulation
+function systemModel(ref) {
+  if (ref.type === 'sol') {
+    return {
+      ref, key: 'sol', title: 'Solar System', sub: 'Sun · G2V', simulated: false, sol: true,
+      star: { name: 'Sun', teff: 5772, rad: 1, lum: 1, mass: 1, spect: 'G2V', est: false },
+      dist: 0, con: null,
+      planets: SOL.planets.map((p, i) => ({ ...p, short: p.name, kind: planetKind(p), sol: true, flags: 0, seed: i + 1 })),
+    }
+  }
+  const sy = ref.type === 'sys' ? ref.sys : (ref.star.sys >= 0 ? SYSTEMS[ref.star.sys] : null)
+  const st = ref.type === 'star' ? ref.star : (sy.star >= 0 ? STARS[sy.star] : null)
+  const teff = sy?.teff ?? st?.teff ?? 5772
+  const rad  = sy?.rad ?? st?.rad ?? null
+  const lum  = sy?.lum ?? st?.lum ?? (rad ? rad * rad * Math.pow(teff / 5772, 4) : 1)
+  const mass = sy?.mass ?? clamp(Math.pow(lum, 1 / 3.5), 0.08, 40)
+  const title = st ? starTitle(st) : prettyName(sy.host)
+  const model = {
+    ref, key: st ? `hip/${st.hip}` : `host/${sy.host}`, title,
+    sub: st ? desig(st) : (sy.spect || 'Planet host'),
+    star: { name: title, teff, rad: rad ?? 1, lum, mass, spect: sy?.spect || st?.spect || '', est: !sy, radKnown: rad != null, massKnown: sy?.mass != null },
+    dist: sy?.dist ?? st?.dist ?? null, con: sy ? sy.con : st.con, sys: sy, st, simulated: false, planets: [],
+  }
+  if (sy) {
+    model.planets = sy.planets.map((p, i) => {
+      const host = sy.host
+      const short = p.name.startsWith(host + ' ') ? p.name.slice(host.length + 1) : prettyName(p.name)
+      return { ...p, name: prettyName(p.name), short, kind: planetKind(p), seed: i + 1 }
+    })
+  } else if (settings.sim) {
+    model.simulated = true
+    model.planets = simulatePlanets(st, lum, mass, rad ?? 1)
+  }
+  return model
+}
+
+function simulatePlanets(st, L, M, Rsun) {
+  const rng = mulberry32(Math.imul(st.hip || st.i + 1, 2654435761))
+  const n = 2 + Math.floor(rng() * 6)
+  const frost = 2.7 * Math.sqrt(L)
+  let a = Math.max(0.035 * Math.sqrt(L), 4 * Rsun * AU_PER_RSUN) * (1.1 + rng() * 1.6)
+  const out = []
+  for (let i = 0; i < n; i++) {
+    let r, m
+    const x = rng()
+    if (a > frost) {
+      if (x < 0.55) { r = 8 + rng() * 4.5; m = 40 + Math.pow(rng(), 2) * 1500 }
+      else          { r = 3.2 + rng() * 1.2; m = Math.pow(r / 0.808, 1 / 0.589) }
+    } else if (x < 0.45) { r = 0.5 + rng() * 0.75; m = Math.pow(r, 1 / 0.279) }
+    else if (x < 0.85)   { r = 1.25 + rng() * 0.75; m = Math.pow(r / 0.808, 1 / 0.589) }
+    else                 { r = 2 + rng() * 1.6;     m = Math.pow(r / 0.808, 1 / 0.589) }
+    const letter = 'bcdefghij'[i]
+    const p = {
+      name: `${starTitle(st)} ${letter}`, short: letter, a, per: 365.25 * Math.sqrt(a ** 3 / M),
+      e: Math.pow(rng(), 3) * 0.2, r, m, teq: 278.6 * Math.pow(L, 0.25) / Math.sqrt(a), sim: true, flags: 0, seed: i + 1,
+    }
+    p.kind = planetKind(p)
+    out.push(p)
+    a *= 1.45 + rng() * 0.9
+  }
+  return out
+}
+
+let sys = null // the live system: { model, planets: [{ p, mesh, orbit, label, ... }], scale, span, days, dps }
+
+function disposeTree(o) {
+  o.traverse(c => { if (c.geometry && c.geometry !== quad) c.geometry.dispose() })
+}
+
+function buildSystem(model) {
+  if (sys) for (const o of sys.objects) { sysGroup.remove(o); disposeTree(o); o.traverse(c => c.material?.userData?.own && c.material.dispose()) }
+  for (const el of planetLabels) el.remove()
+  planetLabels.length = 0
+
+  const st = model.star
+  const tint = starTint(st.teff)
+  uStarColor.value.copy(bbColor(st.teff))
+  starLight.color.copy(tint)
+  const rs = clamp(0.8 + 0.28 * Math.log10(st.rad || 1), 0.45, 1.8)
+  sunMesh.scale.setScalar(rs)
+  sunGlow.scale.setScalar(rs * 6.5)
+  sunCorona.scale.setScalar(rs * 16)
+
+  const ps = [...model.planets].sort((a, b) => a.a - b.a)
+  const [hzIn, hzOut] = hzOf(st.lum)
+  const scale = makeScale(ps.length ? ps.map(p => p.a) : [Math.sqrt(st.lum)], rs)
+  const objects = []
+  const rng = mulberry32(model.key.length * 7919 + (model.planets[0]?.a ?? 1) * 1e6)
+
+  // habitable zone
+  const r1 = scale(hzIn), r2 = scale(hzOut)
+  if (r2 - r1 > 0.02) {
+    const hz = new THREE.Mesh(new THREE.RingGeometry(r1, r2, 160, 1), hzMat)
+    hz.rotation.x = -Math.PI / 2
+    hz.renderOrder = 1
+    // closed Line rather than LineLoop, which the WebGPU renderer does not support
+    const edge = (r) => new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: 161 }, (_, k) => new THREE.Vector3(Math.cos(k / 160 * Math.PI * 2) * r, 0, Math.sin(k / 160 * Math.PI * 2) * r))), hzEdgeMat)
+    objects.push(hz, edge(r1), edge(r2))
+  }
+
+  const live = ps.map((p, i) => {
+    const pr = clamp(0.07 + 0.085 * Math.sqrt(p.r ?? 3), 0.1, 0.42)
+    const e = clamp(p.e ?? 0, 0, 0.95)
+    const omega = rng() * Math.PI * 2
+    const M0 = rng() * Math.PI * 2
+    const mat = planetMaterial(p, p.seed + i * 0.37)
+    mat.userData.own = true
+    const obj = new THREE.Group()                     // positioned on the orbit
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 48, 24), mat) // spins inside it
+    mesh.rotation.z = (rng() - 0.5) * 0.5
+    obj.add(mesh)
+    if (p.ring) obj.add(saturnRing(pr))
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(pr * 2, 0.38), 8, 6), hzMat)
+    hit.visible = false
+    obj.add(hit)
+    const pts = []
+    for (let k = 0; k <= 256; k++) {
+      const nu = k / 256 * Math.PI * 2
+      const rr = scale(p.a * (1 - e * e) / (1 + e * Math.cos(nu)))
+      pts.push(new THREE.Vector3(Math.cos(nu + omega) * rr, 0, -Math.sin(nu + omega) * rr))
+    }
+    const orbit = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), orbitMat)
+    orbit.renderOrder = 1
+    objects.push(obj, orbit)
+    const label = document.createElement('div')
+    label.className = 'lbl-planet'
+    label.textContent = p.name
+    labelsEl.appendChild(label)
+    planetLabels.push(label)
+    const inHZ = p.a >= hzIn && p.a <= hzOut
+    return { p, pr, e, omega, M0, obj, mesh, hit, orbit, el: label, label, inHZ, shown: null }
+  })
+  for (const o of objects) sysGroup.add(o)
+
+  const outer = live.length ? Math.max(...live.map(l => scale(l.p.a * (1 + l.e)))) : r2
+  const span = live.length ? Math.max(outer * 1.15, rs * 5.5, Math.min(r2 * 0.9, outer * 1.6)) : Math.max(r2, rs * 4)
+  const minP = live.length ? Math.min(...live.map(l => l.p.per ?? 365)) : 365
+  sys = { model, planets: live, objects, scale, span, rs, hz: [hzIn, hzOut], days: 0, dps: minP / 8 }
+  positionPlanets()
+}
+
+function solveKepler(M, e) {
+  let E = e < 0.8 ? M : Math.PI
+  for (let k = 0; k < 12; k++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E))
+  return E
+}
+const _pp = new THREE.Vector3()
+function positionPlanets() {
+  for (const l of sys.planets) {
+    const per = l.p.per ?? 365
+    const M = (l.M0 + 2 * Math.PI * sys.days / per) % (2 * Math.PI)
+    const E = solveKepler(M, l.e)
+    const nu = 2 * Math.atan2(Math.sqrt(1 + l.e) * Math.sin(E / 2), Math.sqrt(1 - l.e) * Math.cos(E / 2))
+    const rr = sys.scale(l.p.a * (1 - l.e * Math.cos(E)))
+    l.obj.position.set(Math.cos(nu + l.omega) * rr, 0, -Math.sin(nu + l.omega) * rr)
+  }
+}
+
+// Labels
+const labelsEl = $('labels')
+const planetLabels = []
+const conLabels = CONS.map(c => {
+  const el = document.createElement('div')
+  el.className = 'lbl-con'
+  el.textContent = c.name
+  el.addEventListener('click', e => { e.stopPropagation(); selectCon(c, true) })
+  el.addEventListener('pointerenter', () => { labelHoverCon = c.i; refreshFigures() })
+  el.addEventListener('pointerleave', () => { labelHoverCon = -1; refreshFigures() })
+  labelsEl.appendChild(el)
+  return { c, el, shown: null }
+})
+const NAMED = STARS.filter(s => s.name && s.mag <= 4.2).sort((a, b) => a.mag - b.mag)
+const starLabels = NAMED.map(s => {
+  const el = document.createElement('div')
+  el.className = 'lbl-star'
+  el.textContent = s.name
+  labelsEl.appendChild(el)
+  return { s, el, shown: null }
+})
+let labelHoverCon = -1
+
+const _proj = new THREE.Vector3()
+const _fwd = new THREE.Vector3()
+function screenOf(world, out) {
+  _proj.copy(world).project(camera)
+  out.x = (_proj.x + 1) / 2 * wrap.clientWidth
+  out.y = (1 - _proj.y) / 2 * wrap.clientHeight
+  return _proj.z < 1
+}
+function showLabel(entry, visible, x, y, dx = 0, dy = 0) {
+  if (visible) {
+    entry.el.style.transform = `translate(${x + dx}px, ${y + dy}px) translate(-50%, -50%)`
+  }
+  if (entry.shown !== visible) { entry.el.style.visibility = visible ? 'visible' : 'hidden'; entry.shown = visible }
+}
+const _sp = { x: 0, y: 0 }
+const _wp = new THREE.Vector3()
+function updateLabels() {
+  const W = wrap.clientWidth, H = wrap.clientHeight
+  const inSky = mode === 'sky' && !flying
+  camera.getWorldDirection(_fwd)
+  const cosView = Math.cos(Math.min(89, camera.fov * 0.5 * Math.max(1, camera.aspect) * 1.1) * DEG)
+  const starMagLimit = lerp(1.6, 4.2, clamp((70 - camera.fov) / 55, 0, 1))
+  for (const L of conLabels) {
+    let vis = inSky && settings.labels && L.c.dir.dot(_fwd) > cosView
+    if (vis) { _wp.copy(L.c.dir).multiplyScalar(SKY_R).add(camera.position); vis = screenOf(_wp, _sp) && _sp.x > -60 && _sp.x < W + 60 && _sp.y > -20 && _sp.y < H + 20 }
+    showLabel(L, vis, _sp.x, _sp.y)
+  }
+  for (const L of starLabels) {
+    const isSel = sel?.type === 'star' && sel.star === L.s
+    let vis = inSky && (settings.labels && L.s.mag <= starMagLimit || isSel) && L.s.dir.dot(_fwd) > cosView
+    if (vis) { _wp.copy(L.s.dir).multiplyScalar(SKY_R).add(camera.position); vis = screenOf(_wp, _sp) && _sp.x > -40 && _sp.x < W + 40 && _sp.y > -20 && _sp.y < H + 20 }
+    const off = 9 + starAngle(L.s.mag) * 0.18 / (camera.fov * DEG) * H
+    showLabel(L, vis, _sp.x, _sp.y, off, -off * 0.7)
+  }
+  if (sys && mode === 'system') {
+    for (const l of sys.planets) {
+      l.obj.getWorldPosition(_wp)
+      const vis = !flying && screenOf(_wp, _sp)
+      const pxR = l.pr / (_wp.distanceTo(camera.position) * Math.tan(camera.fov * DEG / 2)) * H / 2
+      showLabel(l, vis, _sp.x, _sp.y, 0, -(pxR + 11))
+    }
+  }
+  updateSelRing()
+}
+
+const selRing = $('sel-ring')
+let selRingShown = false
+function updateSelRing() {
+  let vis = false, x = 0, y = 0, size = 0
+  const H = wrap.clientHeight
+  if (!flying && mode === 'sky' && (sel?.type === 'star' || sel?.type === 'host')) {
+    const s = sel.type === 'star' ? sel.star : sel.sys
+    camera.getWorldDirection(_fwd)
+    if (s.dir.dot(_fwd) > 0) {
+      _wp.copy(s.dir).multiplyScalar(SKY_R).add(camera.position)
+      vis = screenOf(_wp, _sp)
+      x = _sp.x; y = _sp.y
+      const mag = sel.type === 'star' ? s.mag : 7
+      size = 22 + starAngle(mag) * 0.35 * Math.pow(camera.fov / 60, 0.8) / (camera.fov * DEG) * H
+    }
+  } else if (!flying && mode === 'system' && selPlanet) {
+    selPlanet.obj.getWorldPosition(_wp)
+    vis = screenOf(_wp, _sp)
+    x = _sp.x; y = _sp.y
+    size = 14 + 2 * selPlanet.pr / (_wp.distanceTo(camera.position) * Math.tan(camera.fov * DEG / 2)) * H / 2 * 1.5
+  }
+  if (vis) {
+    selRing.style.width = selRing.style.height = `${size}px`
+    selRing.style.transform = `translate(${x - size / 2}px, ${y - size / 2}px)`
+  }
+  if (vis !== selRingShown) { selRing.style.visibility = vis ? 'visible' : 'hidden'; selRingShown = vis }
+}
+
+// Settings (persisted per browser)
+const DEFAULTS = { lines: true, bounds: true, labels: true, milky: true, hosts: true, grid: false, sim: true, dots: true, rotate: false, speed: 26, orbit: 26, bg: '#07070f' }
+const settings = { ...DEFAULTS }
+try { Object.assign(settings, JSON.parse(localStorage.getItem('shaula.settings') || '{}')) } catch {}
+function saveSettings() { try { localStorage.setItem('shaula.settings', JSON.stringify(settings)) } catch {} }
+
+function applySettings() {
+  figureGroup.visible = settings.lines && mode === 'sky'
+  boundLines.visible  = settings.bounds && mode === 'sky'
+  boundSel.visible    = mode === 'sky' && !!boundSel.userData.ab // never draw the empty geometry
+  gridLines.visible   = settings.grid && mode === 'sky'
+  milky.visible       = settings.milky
+  ringMesh.visible    = settings.hosts && mode === 'sky'
+  hostDotMesh.visible = settings.hosts
+  document.documentElement.style.setProperty('--dot-alpha', settings.dots ? '0.12' : '0')
+  document.documentElement.style.setProperty('--bg', settings.bg)
+  controls.autoRotate = settings.rotate
+  controls.autoRotateSpeed = settings.speed / 10 * (mode === 'sky' ? 0.25 : 1)
+}
+
+// Camera modes
+let mode = 'sky'
+let flying = false
+let skyFov = 60, fovTarget = 60
+const skyLook = new THREE.Vector3(1, 0, 0)
+
+function setSkyCamera(dir) {
+  controls.target.set(0, 0, 0)
+  camera.position.copy(dir).normalize().multiplyScalar(-0.01)
+  camera.lookAt(0, 0, 0)
+  controls.update()
+}
+function configureControls() {
+  if (mode === 'sky') {
+    controls.enableZoom = false
+    controls.enablePan = false
+    controls.minDistance = 0.001
+    controls.maxDistance = 1
+    controls.rotateSpeed = -0.32 * camera.fov / 60
+  } else {
+    controls.enableZoom = true
+    controls.enablePan = true
+    controls.minDistance = 1.2
+    controls.maxDistance = Math.min(90, sys.span * 4)
+    controls.rotateSpeed = 0.8
+    controls.zoomSpeed = 0.9
+  }
+}
+
+// Camera animations
+let anim = null
+function animateLook(toDir, toFov, dur = 900) {
+  const from = new THREE.Vector3(); camera.getWorldDirection(from)
+  const q = new THREE.Quaternion().setFromUnitVectors(from, toDir.clone().normalize())
+  anim = { kind: 'look', from, q, fov0: camera.fov, fov1: toFov, t0: performance.now(), dur: REDUCED ? 1 : dur }
+  fovTarget = toFov
+  return new Promise(r => { anim.done = r })
+}
+const _id = new THREE.Quaternion(), _qq = new THREE.Quaternion(), _ld = new THREE.Vector3()
+function stepAnim(now) {
+  if (!anim) return
+  const t = clamp((now - anim.t0) / anim.dur, 0, 1), k = ease(t)
+  if (anim.kind === 'look') {
+    _qq.slerpQuaternions(_id, anim.q, k)
+    _ld.copy(anim.from).applyQuaternion(_qq)
+    setSkyCamera(_ld)
+    camera.fov = lerp(anim.fov0, anim.fov1, k)
+    camera.updateProjectionMatrix()
+  } else if (anim.kind === 'arrive') {
+    camera.position.lerpVectors(anim.p0, anim.p1, k)
+    controls.target.set(0, 0, 0)
+  }
+  if (t >= 1) { const done = anim.done; anim = null; done?.() }
+}
+controls.addEventListener('start', () => {
+  if (anim && anim.kind === 'look' && !flying) { const done = anim.done; anim = null; done?.() }
+  if (anim && anim.kind === 'arrive') { anim = null }
+})
+
+const fadeEl = $('fade')
+const fade = on => new Promise(r => { fadeEl.classList.toggle('show', on); setTimeout(r, REDUCED ? 0 : 290) })
+
+// Enter / exit a system
+let selPlanet = null
+async function enterSystem(ref, { push = true, planetName = null } = {}) {
+  if (flying) return
+  const model = systemModel(ref)
+  flying = true
+  hideTip()
+  if (mode === 'sky') {
+    camera.getWorldDirection(skyLook)
+    skyFov = camera.fov
+    const dir = ref.type === 'sol' ? null : (ref.type === 'sys' ? ref.sys.dir : ref.star.dir)
+    if (dir && !REDUCED) await animateLook(dir, Math.max(4, camera.fov * 0.18), 750)
+  }
+  await fade(true)
+  mode = 'system'
+  document.body.classList.add('in-system')
+  buildSystem(model)
+  sysGroup.visible = true
+  uSkyDim.value = 0.5
+  camera.fov = 45
+  camera.updateProjectionMatrix()
+  configureControls()
+  applySettings()
+  const p1 = new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35)
+  const p0 = p1.clone().multiplyScalar(2.2)
+  camera.position.copy(REDUCED ? p1 : p0)
+  controls.target.set(0, 0, 0)
+  controls.update()
+  selPlanet = null
+  sel = null
+  refreshFigures()
+  renderLegend()
+  showSystemPanel()
+  updateDrawer()
+  if (push) history.pushState(null, '', '#/x/' + (model.sol ? 'sol' : model.key.split('/').map(encodeURIComponent).join('/')))
+  await fade(false)
+  if (!REDUCED) { anim = { kind: 'arrive', p0, p1, t0: performance.now(), dur: 1400 } }
+  flying = false
+  if (planetName) {
+    const l = sys.planets.find(l => l.p.name.toLowerCase() === planetName.toLowerCase())
+    if (l) selectPlanet(l)
+  }
+}
+
+// The system's history entry is replaced by the sky route, so Back never re-enters a system you left
+async function exitSystem() {
+  if (mode !== 'system' || flying) return
+  flying = true
+  const model = sys.model
+  await fade(true)
+  mode = 'sky'
+  document.body.classList.remove('in-system')
+  sysGroup.visible = false
+  uSkyDim.value = 1
+  selPlanet = null
+  camera.fov = fovTarget = skyFov
+  camera.updateProjectionMatrix()
+  configureControls()
+  setSkyCamera(model.sol ? skyLook : (model.st ? model.st.dir : model.sys.dir))
+  applySettings()
+  renderLegend()
+  for (const el of planetLabels) el.style.visibility = 'hidden'
+  if (model.st) selectStar(model.st)
+  else if (model.sys) selectHost(model.sys)
+  else clearSelection()
+  await fade(false)
+  flying = false
+}
+$('back-btn').addEventListener('click', () => exitSystem())
+
+// Selection (sky)
+let sel = null
+function refreshFigures() {
+  const selCon = sel?.type === 'con' ? sel.con.i : sel?.type === 'star' ? sel.star.con : sel?.type === 'host' ? sel.sys.con : -1
+  figures.forEach((f, i) => {
+    f.material = i === selCon && sel?.type === 'con' ? lineMats.sel : (i === selCon || i === hoverCon || i === labelHoverCon) ? lineMats.hover : lineMats.base
+  })
+  conLabels.forEach(L => {
+    L.el.classList.toggle('sel', L.c.i === selCon)
+    L.el.classList.toggle('hover', L.c.i === hoverCon && L.c.i !== selCon)
+  })
+  starLabels.forEach(L => L.el.classList.toggle('sel', sel?.type === 'star' && sel.star === L.s))
+  const ab = selCon >= 0 ? CONS[selCon].abbr.toUpperCase() : null
+  if (ab !== boundSel.userData.ab) {
+    boundSel.geometry.dispose()
+    boundSel.geometry = ab ? boundaryPoints((a, b) => a.toUpperCase() === ab || b.toUpperCase() === ab) : new THREE.BufferGeometry()
+    boundSel.userData.ab = ab
+  }
+  boundSel.visible = mode === 'sky' && !!ab
+}
+
+function routeOfSel() {
+  if (!sel) return location.pathname + location.search
+  if (sel.type === 'con') return '#/c/' + sel.con.abbr
+  if (sel.type === 'star') return '#/s/' + sel.star.hip
+  if (sel.type === 'host') return '#/h/' + encodeURIComponent(sel.sys.host)
+  return location.hash
+}
+function setRoute(replace = true) {
+  const url = routeOfSel()
+  if (replace) history.replaceState(null, '', url)
+  else history.pushState(null, '', url)
+}
+
+function selectStar(s, fly = false, { replace = true } = {}) {
+  sel = { type: 'star', star: s }
+  refreshFigures(); showStarPanel(s); updateDrawer(); setRoute(replace)
+  if (fly) animateLook(s.dir, Math.min(camera.fov, 40))
+}
+function selectHost(sy, fly = false, { replace = true } = {}) {
+  if (sy.star >= 0) return selectStar(STARS[sy.star], fly, { replace })
+  sel = { type: 'host', sys: sy }
+  refreshFigures(); showHostPanel(sy); updateDrawer(); setRoute(replace)
+  if (fly) animateLook(sy.dir, Math.min(camera.fov, 30))
+}
+function selectCon(c, fly = false) {
+  sel = { type: 'con', con: c }
+  refreshFigures(); showConPanel(c); updateDrawer(); setRoute(true)
+  if (fly) animateLook(c.dir, clamp(c.radius / DEG * 2.6, 24, 95))
+}
+function clearSelection() {
+  sel = null
+  hidePanel(); refreshFigures(); updateDrawer()
+  if (mode === 'sky') history.replaceState(null, '', location.pathname + location.search)
+}
+
+function selectPlanet(l) {
+  if (selPlanet) selPlanet.orbit.material = orbitMat
+  selPlanet = l
+  sys.planets.forEach(x => x.label.classList.toggle('sel', x === l))
+  if (l) { l.orbit.material = orbitSelMat; showPlanetPanel(l) } else showSystemPanel()
+  updateDrawer()
+}
+
+// Panels
+const infoPanel = $('info-panel')
+const rightPanel = $('right-panel')
+function kv(k, v, cls = '') {
+  return `<div class="ap-kv"><span class="ap-k">${k}</span><span class="ap-v ${cls}">${v}</span></div>`
+}
+function colSection(title, content, open = false) {
+  return `<div class="ap-col ${open ? 'open' : ''}">
+    <div class="ap-col-hd"><span>${title}</span><span class="ap-chevron">▾</span></div>
+    <div class="ap-col-body">${content}</div>
+  </div>`
+}
+function row(go, dot, name, type, len) {
+  return `<div class="ap-bond-row" ${go ? `data-go="${esc(go)}"` : ''}>
+    <div class="ap-bdot" style="background:${dot}"></div>
+    <span class="ap-bel">${esc(name)}</span>
+    <span class="ap-btype">${esc(type)}</span>
+    <span class="ap-blen">${len}</span>
+  </div>`
+}
+function setHeader(sym, symColor, name, cat) {
+  $('ip-sym').textContent = sym
+  $('ip-sym').style.color = symColor
+  $('ip-sym').style.fontSize = sym.length > 3 ? '15px' : sym.length > 2 ? '19px' : '24px'
+  $('ip-name').textContent = name
+  $('ip-name').title = name
+  $('ip-cat').textContent = cat
+}
+function showPanel(html) {
+  $('ip-content').innerHTML = html
+  $('ip-content').scrollTop = 0
+  rightPanel.classList.add('expanded')
+  infoPanel.classList.add('show')
+  infoPanel.scrollTop = 0
+}
+function hidePanel() {
+  rightPanel.classList.remove('expanded')
+  infoPanel.classList.remove('show')
+}
+
+function bestMonth(ra) {
+  const sunRA = (ra / 15 + 12) % 24
+  const d = new Date(2001, 2, 20 + Math.round(sunRA / 24 * 365.25))
+  return d.toLocaleString('en-US', { month: 'long' })
+}
+function visibleFrom(dec) {
+  const lim = Math.round(90 - Math.abs(dec))
+  return dec >= 0 ? `90°N to ${lim}°S` : `${lim}°N to 90°S`
+}
+const planetsWord = n => `${n} planet${n === 1 ? '' : 's'}`
+
+function showConPanel(c) {
+  const anchor = radecOf(c.dir)
+  setHeader(c.abbr, 'var(--cyan)', c.name, [c.meaning !== c.name && c.meaning, c.zodiac && 'Zodiac', 'Constellation'].filter(Boolean).join(' · '))
+  const brightest = STARS[c.bright]
+  const top = c.members.slice(0, 10).map(s =>
+    row(`s:${s.i}`, cssColor(starTint(s.teff)), starTitle(s), s.name ? desig(s) : (s.spect || ''), `${s.mag.toFixed(2)} mag`)).join('')
+  const hosts = c.systems.slice(0, 10).map(sy =>
+    row(`y:${sy.i}`, 'var(--cyan)', sysTitle(sy), planetsWord(sy.planets.length), fmtLy(sy.dist))).join('')
+  showPanel([
+    colSection('Overview',
+      kv('Genitive', c.gen) +
+      kv('Abbreviation', c.abbr) +
+      kv('Stars to mag 6.5', fmtN(c.count)) +
+      kv('Brightest', esc(starTitle(brightest)), 'cyan') +
+      kv('Planet systems', fmtN(c.hosts), c.hosts ? 'green' : 'zero') +
+      kv('Best at midnight', bestMonth(anchor.ra)) +
+      kv('Visible from', visibleFrom(anchor.dec)), true),
+    colSection('Brightest Stars', top, true),
+    colSection(`Planet Systems${c.hosts > 10 ? ' · nearest 10' : ''}`, hosts || '<div class="ap-empty">No confirmed planets here yet</div>', c.hosts > 0),
+  ].join(''))
+}
+
+function planetRows(planets, prefix) {
+  return planets.map((p, i) => row(prefix ? `${prefix}${i}` : null, KIND[p.kind].css, p.short ?? p.name, KIND[p.kind].label, `${fmtSig(p.a, 3)} AU`)).join('')
+}
+
+function enterAction(label, note) {
+  return `<div class="ap-action"><button class="btn" data-enter>${label}</button><span class="ap-action-note">${note}</span></div>`
+}
+
+function showStarPanel(s) {
+  const c = CONS[s.con]
+  const sy = s.sys >= 0 ? SYSTEMS[s.sys] : null
+  const hexc = cssColor(starTint(s.teff))
+  setHeader(s.greek || s.flam || '★', hexc, starTitle(s), starClass(s.spect, s.teff))
+  const n = sy?.planets.length ?? 0
+  const estimated = !sy
+  const note = n ? `${planetsWord(n)} confirmed` : (settings.sim ? 'No confirmed planets.<br>Shows a simulated system.' : 'No confirmed planets.<br>Shows the star alone.')
+  const L = sy?.lum ?? s.lum
+  showPanel([
+    enterAction('ENTER SYSTEM →', note),
+    colSection('Observed',
+      kv('Designation', esc(longDesig(s))) +
+      kv('Constellation', esc(c.name), 'cyan') +
+      kv('Apparent mag', s.mag.toFixed(2)) +
+      kv('Distance', s.dist != null ? `${fmtLy(s.dist)}` : 'unknown') +
+      kv('Right ascension', fmtRA(s.ra)) +
+      kv('Declination', fmtDec(s.dec)), true),
+    colSection('Physical',
+      kv('Spectral type', esc(s.spect || '—')) +
+      kv('Temperature', `${est(estimated)}${fmtN(s.teff, 0)} K`) +
+      kv('Luminosity', L != null ? `${est(estimated)}${fmtSig(L, 3)} L☉` : '—') +
+      kv('Radius', s.rad != null ? `${est(!sy?.rad)}${fmtSig(s.rad, 3)} R☉` : '—') +
+      (sy?.mass != null ? kv('Mass', `${fmtSig(sy.mass, 3)} M☉`) : '') +
+      kv('Colour index B−V', s.ci != null ? s.ci.toFixed(2) : '—') +
+      (estimated ? '<div class="ap-foot">~ derived from colour, spectral type and parallax</div>' : ''), true),
+    colSection('Catalog',
+      kv('HIP', s.hip || '—') + kv('HD', s.hd || '—') + kv('HR', s.hr || '—')),
+    sy ? colSection(`Planets · ${n}`, planetRows(sy.planets.map(p => ({ ...p, short: prettyName(p.name), kind: planetKind(p) }))), true) : '',
+  ].join(''))
+}
+
+function showHostPanel(sy) {
+  const c = CONS[sy.con]
+  const hexc = cssColor(starTint(sy.teff ?? 5772))
+  setHeader('◎', hexc, prettyName(sy.host), sy.teff ? starClass(sy.spect, sy.teff) : 'Planet host')
+  const ra = sy.ra, dec = sy.dec
+  showPanel([
+    enterAction('ENTER SYSTEM →', `${planetsWord(sy.planets.length)} confirmed${sy.snum > 1 ? `<br>${sy.snum}-star system` : ''}`),
+    colSection('Observed',
+      kv('Constellation', esc(c.name), 'cyan') +
+      kv('V magnitude', sy.vmag != null ? sy.vmag.toFixed(2) : '—') +
+      kv('Distance', fmtLy(sy.dist)) +
+      kv('Right ascension', fmtRA(ra)) +
+      kv('Declination', fmtDec(dec)) +
+      (sy.vmag != null && sy.vmag > 6.5 ? '<div class="ap-foot">Too faint for the naked eye</div>' : ''), true),
+    colSection('Physical',
+      kv('Spectral type', esc(sy.spect || '—')) +
+      kv('Temperature', sy.teff ? `${fmtN(sy.teff)} K` : '—') +
+      kv('Luminosity', sy.lum != null ? `${fmtSig(sy.lum, 3)} L☉` : '—') +
+      kv('Radius', sy.rad != null ? `${fmtSig(sy.rad, 3)} R☉` : '—') +
+      kv('Mass', sy.mass != null ? `${fmtSig(sy.mass, 3)} M☉` : '—'), true),
+    colSection(`Planets · ${sy.planets.length}`, planetRows(sy.planets.map(p => ({ ...p, short: prettyName(p.name), kind: planetKind(p) }))), true),
+  ].join(''))
+}
+
+function showSystemPanel() {
+  const m = sys.model, st = m.star
+  const hexc = cssColor(starTint(st.teff))
+  const sym = m.sol ? '☉' : m.st ? (m.st.greek || m.st.flam || '★') : '◎'
+  setHeader(sym, hexc, m.title, m.planets.length ? `${m.simulated ? 'Simulated' : 'Planetary'} system · ${planetsWord(m.planets.length)}` : 'No known planets')
+  const ordered = sys.planets.map(l => l.p)
+  const [h1, h2] = sys.hz
+  const inHZ = sys.planets.filter(l => l.inHZ).map(l => l.p.short ?? l.p.name)
+  const note = m.simulated
+    ? '<div class="ap-note">Simulated system. This star has no confirmed planets; these orbits are generated from its estimated luminosity and mass, for illustration only.</div>'
+    : (!m.planets.length ? '<div class="ap-note">No confirmed planets. Turn on Simulated planets in Settings to imagine one.</div>' : '')
+  showPanel([
+    note,
+    colSection('Star',
+      kv('Type', esc(starClass(st.spect, st.teff))) +
+      kv('Spectral type', esc(st.spect || '—')) +
+      kv('Temperature', `${est(st.est)}${fmtN(st.teff)} K`) +
+      kv('Luminosity', `${est(st.est)}${fmtSig(st.lum, 3)} L☉`) +
+      kv('Radius', `${est(st.est || st.radKnown === false)}${fmtSig(st.rad, 3)} R☉`) +
+      kv('Mass', `${est(!m.sol && !st.massKnown)}${fmtSig(st.mass, 3)} M☉`) +
+      (m.sol ? '' : kv('Distance', fmtLy(m.dist))) +
+      (m.con != null ? kv('Constellation', esc(CONS[m.con].name), 'cyan') : ''), true),
+    ordered.length ? colSection(`${m.simulated ? 'Simulated planets' : 'Planets'} · ${ordered.length}`, planetRows(ordered, 'p:'), true) : '',
+    colSection('Habitable Zone',
+      kv('Inner edge', `${fmtSig(h1, 3)} AU`) +
+      kv('Outer edge', `${fmtSig(h2, 3)} AU`) +
+      kv('Planets inside', inHZ.length ? esc(inHZ.join(', ')) : 'none', inHZ.length ? 'green' : 'zero') +
+      '<div class="ap-foot">Conservative estimate where liquid water could exist on an Earth-like surface. Orbits drawn on a compressed log scale.</div>', true),
+  ].join(''))
+}
+
+function showPlanetPanel(l) {
+  const p = l.p
+  const k = KIND[p.kind]
+  const sym = p.sol ? { Mercury:'☿', Venus:'♀', Earth:'⊕', Mars:'♂', Jupiter:'♃', Saturn:'♄', Uranus:'⛢', Neptune:'♆' }[p.name] : (p.short && p.short.length <= 3 ? p.short : '●')
+  setHeader(sym, k.css, p.name, `${k.label} · ${p.sim ? 'Simulated' : p.sol ? 'Solar System' : 'Confirmed'}`)
+  const f = p.flags || 0
+  const teqLbl = p.sol ? 'Mean temperature' : 'Equilibrium temp'
+  const mLbl = p.msini ? 'Min. mass (M sin i)' : 'Mass'
+  const tC = p.teq != null ? `${est(f & 8 || p.sim)}${fmtN(p.teq)} K · ${fmtN(p.teq - 273.15)} °C` : '—'
+  showPanel([
+    p.sim ? '<div class="ap-note">Simulated planet, not a real detection.</div>' : '',
+    colSection('Orbit',
+      kv('Semi-major axis', `${est(f & 1 || p.sim)}${fmtSig(p.a, 3)} AU`) +
+      kv('Period', `${est(f & 2 || p.sim)}${fmtPeriod(p.per)}`) +
+      kv('Eccentricity', p.e != null ? fmtSig(p.e, 2) : '—') +
+      kv('Habitable zone', l.inHZ ? 'inside' : p.a < sys.hz[0] ? 'too hot (inside)' : 'too cold (outside)', l.inHZ ? 'green' : 'zero'), true),
+    colSection('Physical',
+      kv('Radius', p.r != null ? `${est(f & 4 || p.sim)}${fmtSig(p.r, 3)} R⊕` : 'unknown') +
+      kv(mLbl, p.m != null ? `${est(p.sim)}${fmtSig(p.m, 3)} M⊕` : 'unknown') +
+      (p.m != null && p.m > 30 ? kv('', `${fmtSig(p.m / 317.83, 3)} M♃`) : '') +
+      kv(teqLbl, tC) +
+      (p.insol != null ? kv('Insolation', `${fmtSig(p.insol, 3)} × Earth`) : ''), true),
+    p.sim || p.sol ? '' : colSection('Discovery',
+      kv('Year', p.year ?? '—') +
+      kv('Method', esc(p.method ?? '—')) +
+      kv('Facility', esc(p.facility ?? '—')), true),
+    (f && !p.sim) ? '<div class="ap-col"><div class="ap-col-body" style="display:block;padding-top:6px"><div class="ap-foot">~ estimated: missing values derived from period, stellar mass or a mass-radius relation</div></div></div>' : '',
+  ].join(''))
+}
+
+$('ip-close').addEventListener('click', () => { if (mode === 'system') selectPlanet(null); else clearSelection() })
+$('ip-content').addEventListener('click', e => {
+  const hd = e.target.closest('.ap-col-hd')
+  if (hd) { hd.closest('.ap-col').classList.toggle('open'); return }
+  if (e.target.closest('[data-enter]')) { enterSelected(); return }
+  const go = e.target.closest('[data-go]')?.dataset.go
+  if (!go) return
+  const [kind, idx] = go.split(':')
+  if (kind === 's') selectStar(STARS[+idx], true)
+  else if (kind === 'y') { const sy = SYSTEMS[+idx]; mode === 'sky' ? selectHost(sy, true) : null }
+  else if (kind === 'p') selectPlanet(sys.planets[+idx])
+})
+function enterSelected() {
+  if (mode !== 'sky' || !sel) return
+  if (sel.type === 'star') enterSystem({ type: 'star', star: sel.star })
+  else if (sel.type === 'host') enterSystem({ type: 'sys', sys: sel.sys })
+}
+
+// Legend
+function renderLegend() {
+  const leg = $('leg-panel')
+  if (mode === 'sky') {
+    const t = [[30000, 'Blue · 10,000 K+'], [8500, 'White · 7,500 K'], [5800, 'Yellow · 5,800 K'], [4400, 'Orange · 4,400 K'], [3300, 'Red · 3,300 K']]
+    leg.innerHTML = `<div class="leg-title">Star Colour</div>` +
+      t.map(([k, label]) => `<div class="leg-row"><div class="leg-dot" style="background:${cssColor(starTint(k))}"></div>${label}</div>`).join('') +
+      `<div class="leg-title">Overlays</div>
+       <div class="leg-row"><div class="leg-bond"></div>Figure</div>
+       <div class="leg-row"><div class="leg-bond faint"></div>Boundary</div>
+       <div class="leg-row"><div class="leg-ring"></div>Planet host</div>`
+  } else {
+    leg.innerHTML = `<div class="leg-title">Planets</div>` +
+      Object.values(KIND).map(k => `<div class="leg-row"><div class="leg-dot" style="background:${k.css}"></div>${k.label}</div>`).join('') +
+      `<div class="leg-title">Zones</div>
+       <div class="leg-row"><div class="leg-band"></div>Habitable zone</div>
+       <div class="leg-row"><div class="leg-bond"></div>Orbit</div>`
+  }
+}
+
+// Bottom drawer
+function item(lbl, val, accent = false, id = '') {
+  return `<div class="info-item"><span class="lbl">${lbl}</span><span class="val ${accent ? 'accent' : ''}" ${id ? `id="${id}"` : ''}>${val}</span></div>`
+}
+function chemItem(lbl, val) {
+  return `<div class="bd-chem-item"><span class="bd-chem-lbl">${lbl}</span><span class="bd-chem-val">${val}</span></div>`
+}
+function updateDrawer() {
+  const stats = $('bd-stats'), chem = $('bd-chem-row')
+  if (mode === 'sky') {
+    stats.innerHTML =
+      item('View', 'Sky', true) +
+      item('Facing', '—', false, 'v-facing') +
+      item('RA', '—', false, 'v-ra') +
+      item('Dec', '—', false, 'v-dec') +
+      item('Field', '—', false, 'v-fov') +
+      item('Stars', fmtN(STARS.length)) +
+      item('Systems', fmtN(SYSTEMS.length))
+    _hud = ''
+    updateHud()
+    if (sel?.type === 'star') {
+      const s = sel.star, n = s.sys >= 0 ? SYSTEMS[s.sys].planets.length : 0
+      chem.innerHTML = (n ? `<span class="bd-badge nonpolar">${planetsWord(n)}</span>` : `<span class="bd-badge polar">No known planets</span>`) +
+        chemItem('Star', esc(starTitle(s))) + chemItem('Distance', fmtLy(s.dist)) + chemItem('Spectral', esc(s.spect || '—')) + chemItem('Magnitude', s.mag.toFixed(2))
+    } else if (sel?.type === 'host') {
+      const sy = sel.sys
+      chem.innerHTML = `<span class="bd-badge nonpolar">${planetsWord(sy.planets.length)}</span>` +
+        chemItem('Host', esc(prettyName(sy.host))) + chemItem('Distance', fmtLy(sy.dist)) + chemItem('Spectral', esc(sy.spect || '—')) + chemItem('V mag', sy.vmag != null ? sy.vmag.toFixed(2) : '—')
+    } else if (sel?.type === 'con') {
+      const c = sel.con
+      chem.innerHTML = (c.zodiac ? `<span class="bd-badge ionic">Zodiac</span>` : `<span class="bd-badge accent">${esc(c.abbr)}</span>`) +
+        chemItem('Constellation', esc(c.name)) + (c.meaning !== c.name ? chemItem('Meaning', esc(c.meaning)) : '') + chemItem('Brightest', esc(starTitle(STARS[c.bright]))) + chemItem('Stars', fmtN(c.count)) + chemItem('Systems', fmtN(c.hosts))
+    } else {
+      chem.innerHTML = '<span class="bd-empty">Click a star, or anywhere inside a constellation</span>'
+    }
+  } else {
+    const m = sys.model
+    const [h1, h2] = sys.hz
+    stats.innerHTML =
+      item('System', esc(m.title), true) +
+      item('Star', esc(m.star.spect || '—')) +
+      item('Distance', m.sol ? '0 ly' : fmtLy(m.dist)) +
+      item('Planets', m.planets.length) +
+      item('Habitable Zone', `${fmtSig(h1, 2)}–${fmtSig(h2, 2)} AU`) +
+      item('Time', '—', false, 'v-time')
+    _hud = ''
+    updateHud()
+    const p = selPlanet?.p
+    const badge = m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`
+    if (p) {
+      chem.innerHTML = badge + chemItem('Planet', esc(p.name)) + chemItem('Type', KIND[p.kind].label) +
+        chemItem('Orbit', `${fmtSig(p.a, 3)} AU`) + chemItem('Period', fmtPeriod(p.per)) + (selPlanet.inHZ ? '<span class="bd-badge nonpolar">Habitable zone</span>' : '')
+    } else {
+      const years = m.planets.map(p => p.year).filter(Boolean)
+      const methods = [...new Set(m.planets.map(p => p.method).filter(Boolean))]
+      chem.innerHTML = badge +
+        (m.con != null ? chemItem('Constellation', esc(CONS[m.con].name)) : '') +
+        (years.length ? chemItem('Discovered', Math.min(...years) === Math.max(...years) ? Math.min(...years) : `${Math.min(...years)}–${Math.max(...years)}`) : '') +
+        (methods.length ? chemItem('Method', esc(methods.slice(0, 2).join(', '))) : '') +
+        (m.sol ? chemItem('Age', '4.6 billion years') : '')
+    }
+  }
+}
+let _hud = ''
+function updateHud() {
+  if (mode === 'sky') {
+    const d = camera.getWorldDirection(_fwd)
+    const { ra, dec } = radecOf(d)
+    const c = CONS[conAt(d)]
+    const s = `${c.name}|${fmtRA(ra).slice(0, 7)}|${fmtDec(dec).slice(0, 8)}|${Math.round(camera.fov)}`
+    if (s === _hud) return
+    _hud = s
+    const f = $('v-facing'); if (!f) return
+    f.textContent = c.name
+    $('v-ra').textContent = fmtRA(ra).slice(0, 7)
+    $('v-dec').textContent = fmtDec(dec).slice(0, 8)
+    $('v-fov').textContent = `${Math.round(camera.fov)}°`
+  } else if (sys) {
+    const dps = sys.dps * orbitMul()
+    const s = dps >= 365.25 ? `1s = ${fmtSig(dps / 365.25, 2)} yr` : dps >= 1 ? `1s = ${fmtSig(dps, 2)} d` : `1s = ${fmtSig(dps * 24, 2)} h`
+    if (s === _hud) return
+    _hud = s
+    const t = $('v-time'); if (t) t.textContent = s
+  }
+}
+const orbitMul = () => Math.pow(2, (settings.orbit - 26) / 5)
+
+// Pointer: hover + click
+const raycaster = new THREE.Raycaster()
+const ndc = new THREE.Vector2()
+const tipEl = $('tip')
+let hoverCon = -1
+function rayAt(x, y) {
+  const r = canvas.getBoundingClientRect()
+  ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1)
+  raycaster.setFromCamera(ndc, camera)
+  return raycaster.ray.direction
+}
+function pickSky(dir) {
+  const pxPerRad = wrap.clientHeight / (camera.fov * DEG)
+  const k = Math.pow(camera.fov / 60, 0.8)
+  const cosMax = Math.cos(40 / pxPerRad)
+  let best = null, bestScore = Infinity
+  for (const s of STARS) {
+    const c = s.dir.dot(dir)
+    if (c < cosMax) continue
+    const px = Math.acos(Math.min(1, c)) * pxPerRad
+    if (px > 8 + starAngle(s.mag) * k * pxPerRad * 0.2) continue
+    const score = px - (6.8 - s.mag) * 1.4
+    if (score < bestScore) { bestScore = score; best = { type: 'star', star: s } }
+  }
+  if (settings.hosts) {
+    for (const sy of FAINT_HOSTS) {
+      const c = sy.dir.dot(dir)
+      if (c < cosMax) continue
+      const px = Math.acos(Math.min(1, c)) * pxPerRad
+      if (px > 7) continue
+      const score = px + 2
+      if (score < bestScore) { bestScore = score; best = { type: 'host', sys: sy } }
+    }
+  }
+  return best
+}
+function pickPlanet(x, y) {
+  rayAt(x, y)
+  const hits = raycaster.intersectObjects(sys.planets.flatMap(l => [l.mesh, l.hit]), false)
+  if (hits.length) return sys.planets.find(l => l.mesh === hits[0].object || l.hit === hits[0].object)
+  if (raycaster.intersectObject(sunMesh, false).length) return 'star'
+  return null
+}
+
+function showTip(x, y, html) {
+  tipEl.innerHTML = html
+  const W = wrap.clientWidth
+  const tx = x + 16 + tipEl.offsetWidth > W ? x - 16 - tipEl.offsetWidth : x + 16
+  tipEl.style.transform = `translate(${tx}px, ${y + 14}px)`
+  tipEl.style.visibility = 'visible'
+}
+function hideTip() { tipEl.style.visibility = 'hidden' }
+
+let _downX = 0, _downY = 0, _dragging = false, _hoverQueued = null
+canvas.addEventListener('pointerdown', e => { _downX = e.clientX; _downY = e.clientY; _dragging = true; hideTip() })
+window.addEventListener('pointerup', () => { _dragging = false })
+canvas.addEventListener('pointerleave', () => { hideTip(); if (hoverCon !== -1) { hoverCon = -1; refreshFigures() } wrap.classList.remove('pointer') })
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') return
+  _hoverQueued = { x: e.clientX, y: e.clientY }
+})
+function processHover() {
+  if (!_hoverQueued || flying) return
+  const { x, y } = _hoverQueued
+  _hoverQueued = null
+  if (_dragging) { hideTip(); return }
+  const r = canvas.getBoundingClientRect()
+  const lx = x - r.left, ly = y - r.top
+  if (mode === 'sky') {
+    const dir = rayAt(x, y)
+    const hit = pickSky(dir)
+    const hc = hit ? -1 : conAt(dir)
+    if (hc !== hoverCon) { hoverCon = hc; refreshFigures() }
+    wrap.classList.toggle('pointer', !!hit)
+    if (hit?.type === 'star') {
+      const s = hit.star, n = s.sys >= 0 ? SYSTEMS[s.sys].planets.length : 0
+      showTip(lx, ly, `${esc(starTitle(s))}<div class="t-sub">${esc(s.name ? desig(s) + ' · ' : '')}${s.mag.toFixed(1)} mag · ${fmtLy(s.dist)}</div>${n ? `<div class="t-sub accent">${planetsWord(n)}</div>` : ''}`)
+    } else if (hit?.type === 'host') {
+      const sy = hit.sys
+      showTip(lx, ly, `${esc(prettyName(sy.host))}<div class="t-sub">${fmtLy(sy.dist)}</div><div class="t-sub accent">${planetsWord(sy.planets.length)}</div>`)
+    } else hideTip()
+  } else {
+    const hit = pickPlanet(x, y)
+    wrap.classList.toggle('pointer', !!hit)
+    if (hit && hit !== 'star') {
+      showTip(lx, ly, `${esc(hit.p.name)}<div class="t-sub">${KIND[hit.p.kind].label} · ${fmtSig(hit.p.a, 3)} AU</div>`)
+    } else if (hit === 'star') {
+      showTip(lx, ly, `${esc(sys.model.star.name)}<div class="t-sub">${esc(sys.model.star.spect || '')}</div>`)
+    } else hideTip()
+  }
+}
+
+canvas.addEventListener('click', e => {
+  if (flying) return
+  if (Math.hypot(e.clientX - _downX, e.clientY - _downY) > 5) return
+  if (mode === 'sky') {
+    const dir = rayAt(e.clientX, e.clientY)
+    const hit = pickSky(dir)
+    if (hit?.type === 'star') {
+      if (sel?.type === 'star' && sel.star === hit.star) enterSystem({ type: 'star', star: hit.star })
+      else selectStar(hit.star)
+    } else if (hit?.type === 'host') {
+      if (sel?.type === 'host' && sel.sys === hit.sys) enterSystem({ type: 'sys', sys: hit.sys })
+      else selectHost(hit.sys)
+    } else {
+      const c = CONS[conAt(dir)]
+      if (sel?.type === 'con' && sel.con === c) clearSelection()
+      else selectCon(c)
+    }
+  } else {
+    const hit = pickPlanet(e.clientX, e.clientY)
+    if (hit === 'star') selectPlanet(null)
+    else if (hit) selectPlanet(hit === selPlanet ? null : hit)
+  }
+})
+
+// Zoom: field of view in the sky, dolly in systems
+canvas.addEventListener('wheel', e => {
+  if (mode !== 'sky' || flying) return
+  e.preventDefault()
+  if (anim?.kind === 'look') anim = null
+  fovTarget = clamp(fovTarget * Math.exp(e.deltaY * 0.0012), 6, 100)
+}, { passive: false })
+const _touches = new Map()
+let _pinch0 = 0, _pinchFov = 60
+canvas.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return
+  _touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (_touches.size === 2) { const [a, b] = [..._touches.values()]; _pinch0 = Math.hypot(a.x - b.x, a.y - b.y); _pinchFov = fovTarget }
+})
+canvas.addEventListener('pointermove', e => {
+  if (!_touches.has(e.pointerId)) return
+  _touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (_touches.size === 2 && mode === 'sky' && _pinch0 > 0) {
+    const [a, b] = [..._touches.values()]
+    fovTarget = clamp(_pinchFov * _pinch0 / Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), 6, 100)
+  }
+})
+const _endTouch = e => { _touches.delete(e.pointerId); if (_touches.size < 2) _pinch0 = 0 }
+canvas.addEventListener('pointerup', _endTouch)
+canvas.addEventListener('pointercancel', _endTouch)
+
+// Auto-rotate pauses while the user drags, resumes shortly after (as in the molecule viewer)
+let _rotateResumeTimer = null
+controls.addEventListener('start', () => { clearTimeout(_rotateResumeTimer); controls.autoRotate = false })
+controls.addEventListener('end', () => {
+  if (!settings.rotate) return
+  clearTimeout(_rotateResumeTimer)
+  _rotateResumeTimer = setTimeout(() => { controls.autoRotate = true }, 700)
+})
+
+// Search
+const GEN_TO = new Map(), ABBR_TO = new Map()
+CONS.forEach(c => { GEN_TO.set(norm(c.gen), c.abbr.toLowerCase()); ABBR_TO.set(c.abbr.toLowerCase(), c.abbr.toLowerCase()) })
+function norm(s) {
+  return String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9α-ω]/g, '')
+}
+// "alpha centauri", "alp cen", "α¹ Cen" → "α1cen"
+function queryKeys(q) {
+  const t = q.trim().toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  const keys = [norm(t)]
+  const m = t.match(/^([a-zα-ω]+)\s*(\d*)\s+(.+)$/)
+  if (m) {
+    const g = GREEK_WORDS[m[1]] ?? (/^[α-ω]$/.test(m[1]) ? m[1] : null)
+    const restRaw = m[3].trim()
+    const rest = norm(restRaw)
+    const ab = GEN_TO.get(rest) ?? ABBR_TO.get(rest) ?? (() => {
+      const w = restRaw.split(/\s+/)
+      for (let k = w.length - 1; k > 0; k--) {
+        const a = GEN_TO.get(norm(w.slice(0, k).join(' '))) ?? ABBR_TO.get(norm(w.slice(0, k).join(' ')))
+        if (a) return a + norm(w.slice(k).join(' '))
+      }
+      return null
+    })()
+    if (g && ab) keys.unshift(g + m[2] + ab)
+  }
+  return keys
+}
+const INDEX = new Map()
+const ENTRIES = []
+function addKey(key, entry) {
+  if (!key || INDEX.has(key)) return
+  INDEX.set(key, entry)
+  ENTRIES.push([key, entry])
+}
+CONS.forEach(c => { const e = { kind: 'con', c, label: c.name }; addKey(norm(c.name), e); addKey(norm(c.meaning), e); addKey(c.abbr.toLowerCase(), e) })
+addKey('sun', { kind: 'sol', label: 'Sun' }); addKey('sol', { kind: 'sol', label: 'Sun' }); addKey('solarsystem', { kind: 'sol', label: 'Solar System' })
+SOL.planets.forEach(p => addKey(norm(p.name), { kind: 'solplanet', name: p.name, label: p.name }))
+const byMag = [...STARS].sort((a, b) => a.mag - b.mag)
+byMag.filter(s => s.name).forEach(s => addKey(norm(s.name), { kind: 'star', s, label: s.name }))
+byMag.forEach(s => {
+  const e = { kind: 'star', s, label: starTitle(s) }
+  const ab = CONS[s.con].abbr.toLowerCase()
+  if (s.greek) { addKey(norm(s.greek) + ab, e); addKey(s.greek.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, '') + ab, e) }
+  if (s.flam) addKey(s.flam + ab, e)
+  if (s.hip) addKey('hip' + s.hip, e)
+  if (s.hd) addKey('hd' + s.hd, e)
+  if (s.hr) addKey('hr' + s.hr, e)
+})
+function hostKeys(name) {
+  const keys = [norm(name)]
+  const m = name.match(/^([a-z]{2,3})(\d*) (.+)$/)
+  if (m && GREEK_ABBR[m[1]]) keys.push(GREEK_ABBR[m[1]] + m[2] + norm(m[3]))
+  return keys
+}
+SYSTEMS.forEach(sy => {
+  const e = { kind: 'sys', sy, label: sysTitle(sy) }
+  hostKeys(sy.host).forEach(k => addKey(k, e))
+  if (sy.hip) addKey('hip' + sy.hip, e)
+})
+SYSTEMS.forEach(sy => sy.planets.forEach(p => {
+  const e = { kind: 'planet', sy, p, label: prettyName(p.name) }
+  hostKeys(p.name).forEach(k => addKey(k, e))
+}))
+
+;(() => {
+  const opts = [
+    ...CONS.map(c => c.name), 'Sun', ...SOL.planets.map(p => p.name),
+    ...byMag.filter(s => s.name).map(s => s.name),
+    ...SYSTEMS.filter(sy => sy.star < 0).map(sy => prettyName(sy.host)),
+  ]
+  $('search-list').innerHTML = [...new Set(opts)].map(o => `<option value="${esc(o)}"></option>`).join('')
+})()
+
+function lookup(q) {
+  const keys = queryKeys(q)
+  for (const k of keys) if (INDEX.has(k)) return INDEX.get(k)
+  const k0 = keys[0]
+  if (k0.length < 2) return null
+  for (const [k, e] of ENTRIES) if (k.startsWith(k0)) return e
+  if (k0.length < 3) return null
+  for (const [k, e] of ENTRIES) if (k.includes(k0)) return e
+  return null
+}
+
+const errEl = $('error')
+let errTimer
+function showErr(msg) {
+  errEl.textContent = msg; errEl.classList.add('show')
+  clearTimeout(errTimer)
+  errTimer = setTimeout(() => errEl.classList.remove('show'), 5000)
+}
+
+async function go(e) {
+  if (!e) return
+  if (e.kind === 'sol' || e.kind === 'solplanet') {
+    if (mode === 'system' && sys.model.sol) {
+      if (e.kind === 'solplanet') selectPlanet(sys.planets.find(l => l.p.name === e.name))
+      return
+    }
+    if (mode === 'system') await exitSystem()
+    return enterSystem({ type: 'sol' }, { planetName: e.kind === 'solplanet' ? e.name : null })
+  }
+  if (e.kind === 'planet') {
+    const ref = e.sy.star >= 0 ? { type: 'star', star: STARS[e.sy.star] } : { type: 'sys', sys: e.sy }
+    const name = prettyName(e.p.name)
+    if (mode === 'system' && sys.model.sys === e.sy) return selectPlanet(sys.planets.find(l => l.p.name === name))
+    if (mode === 'system') await exitSystem()
+    return enterSystem(ref, { planetName: name })
+  }
+  if (mode === 'system') await exitSystem()
+  if (e.kind === 'con') selectCon(e.c, true)
+  else if (e.kind === 'star') selectStar(e.s, true)
+  else if (e.kind === 'sys') selectHost(e.sy, true)
+}
+
+const inputEl = $('search-input')
+function search() {
+  const q = inputEl.value.trim()
+  if (!q) return
+  const e = lookup(q)
+  if (!e) return showErr(`Nothing found for "${q}"`)
+  inputEl.blur()
+  go(e)
+}
+$('go-btn').addEventListener('click', search)
+inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') search() })
+
+// Keyboard
+window.addEventListener('keydown', e => {
+  if (e.target.matches('input, textarea')) { if (e.key === 'Escape') e.target.blur(); return }
+  if (e.key === '/') { e.preventDefault(); inputEl.focus(); inputEl.select(); return }
+  if (e.key === 'Escape') {
+    if (mode === 'system') { if (selPlanet) selectPlanet(null); else exitSystem() }
+    else clearSelection()
+  }
+  if (e.key === 'Enter') enterSelected()
+  if (e.key === 'r' || e.key === 'R') resetView()
+})
+function resetView() {
+  if (mode === 'sky') {
+    const target = sel?.type === 'con' ? sel.con.dir : sel?.type === 'star' ? sel.star.dir : sel?.type === 'host' ? sel.sys.dir : CONS.find(c => c.abbr === 'Ori').dir
+    animateLook(target, 60)
+  } else {
+    selectPlanet(null)
+    anim = { kind: 'arrive', p0: camera.position.clone(), p1: new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35), t0: performance.now(), dur: REDUCED ? 1 : 900 }
+  }
+}
+
+// Routes: #/c/Ori, #/s/<HIP>, #/h/<host>, #/x/hip/<HIP>, #/x/host/<host>, #/x/sol
+function parseRoute() {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent)
+  const [k, a, b] = parts
+  if (k === 'c') { const c = CONS.find(c => c.abbr.toLowerCase() === (a || '').toLowerCase()); return c ? { kind: 'con', c } : null }
+  if (k === 's') { const s = STARS.find(s => s.hip === +a); return s ? { kind: 'star', s } : null }
+  if (k === 'h') { const sy = SYSTEMS.find(sy => sy.host === a); return sy ? { kind: 'sys', sy } : null }
+  if (k === 'x') {
+    if (a === 'sol') return { kind: 'enter', ref: { type: 'sol' } }
+    if (a === 'hip') { const s = STARS.find(s => s.hip === +b); return s ? { kind: 'enter', ref: { type: 'star', star: s } } : null }
+    if (a === 'host') { const sy = SYSTEMS.find(sy => sy.host === b); return sy ? { kind: 'enter', ref: sy.star >= 0 ? { type: 'star', star: STARS[sy.star] } : { type: 'sys', sys: sy } } : null }
+  }
+  return null
+}
+async function applyRoute(initial = false) {
+  const r = parseRoute()
+  if (r?.kind === 'enter') {
+    if (mode === 'system') {
+      if (sys.model.key === systemModel(r.ref).key) return
+      await exitSystem()
+    }
+    if (initial) {
+      const d = r.ref.type === 'sol' ? CONS.find(c => c.abbr === 'Ori').dir : (r.ref.type === 'sys' ? r.ref.sys.dir : r.ref.star.dir)
+      setSkyCamera(d)
+    }
+    return enterSystem(r.ref, { push: false })
+  }
+  if (mode === 'system') await exitSystem()
+  if (!r) { if (!initial) clearSelection(); return }
+  if (initial) setSkyCamera(r.kind === 'con' ? r.c.dir : r.kind === 'star' ? r.s.dir : r.sy.dir)
+  if (r.kind === 'con') selectCon(r.c, !initial)
+  else if (r.kind === 'star') selectStar(r.s, !initial)
+  else if (r.kind === 'sys') selectHost(r.sy, !initial)
+  if (initial && r.kind === 'con') { camera.fov = fovTarget = clamp(r.c.radius / DEG * 2.6, 24, 95); camera.updateProjectionMatrix() }
+  if (initial && r.kind !== 'con') { camera.fov = fovTarget = 40; camera.updateProjectionMatrix() }
+}
+window.addEventListener('popstate', () => applyRoute(false))
+
+// Render loop
+let last = performance.now(), _hudT = 0
+renderer.setAnimationLoop(now => {
+  now = now ?? performance.now()
+  const dt = Math.min(0.05, (now - last) / 1000); last = now
+  stepAnim(now)
+  if (mode === 'sky') {
+    if (!anim && Math.abs(camera.fov - fovTarget) > 0.01) {
+      camera.fov += (fovTarget - camera.fov) * 0.15
+      camera.updateProjectionMatrix()
+    }
+    controls.rotateSpeed = -0.32 * camera.fov / 60
+    updateStarScales()
+  } else if (sys) {
+    sys.days += dt * sys.dps * orbitMul()
+    positionPlanets()
+    for (const l of sys.planets) l.mesh.rotation.y += dt * 0.35
+    if (selPlanet && !anim) {
+      selPlanet.obj.getWorldPosition(_wp)
+      const delta = _wp.sub(controls.target).multiplyScalar(0.12)
+      controls.target.add(delta)
+      camera.position.add(delta)
+    }
+  }
+  controls.update()
+  skyGroup.position.copy(camera.position)
+  renderer.render(scene, camera)
+  processHover()
+  updateLabels()
+  if (now - _hudT > 150) { _hudT = now; updateHud() }
+})
+
+window.addEventListener('resize', () => {
+  camera.aspect = wrap.clientWidth / wrap.clientHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight)
+})
+
+// Settings + help + bug report UI
+;(() => {
+  const sBtn   = $('settings-btn')
+  const sPanel = $('settings-panel')
+  const hBtn   = $('help-btn')
+  const hPanel = $('help-panel')
+
+  sBtn.addEventListener('click', e => { e.stopPropagation(); hPanel.classList.remove('show'); sPanel.classList.toggle('show') })
+  hBtn.addEventListener('click', e => { e.stopPropagation(); sPanel.classList.remove('show'); hPanel.classList.toggle('show') })
+  document.addEventListener('click', e => {
+    if (!sPanel.contains(e.target) && e.target !== sBtn) sPanel.classList.remove('show')
+    if (!hPanel.contains(e.target) && e.target !== hBtn) hPanel.classList.remove('show')
+  })
+
+  const customPicker = $('bg-custom-picker')
+  const customWrap   = $('bg-custom-wrap')
+  const swatches = document.querySelectorAll('.bg-swatch')
+  const markBg = () => {
+    let matched = false
+    swatches.forEach(x => { const on = x.dataset.bg === settings.bg; x.classList.toggle('active', on); matched ||= on })
+    customWrap.classList.toggle('active', !matched)
+    if (!matched) customPicker.value = settings.bg
+  }
+  swatches.forEach(b => b.addEventListener('click', () => { settings.bg = b.dataset.bg; markBg(); applySettings(); saveSettings() }))
+  customPicker.addEventListener('input', () => { settings.bg = customPicker.value; markBg(); applySettings(); saveSettings() })
+  markBg()
+
+  document.querySelectorAll('[data-set]').forEach(input => {
+    const key = input.dataset.set
+    if (input.type === 'checkbox') input.checked = !!settings[key]
+    else input.value = settings[key]
+    input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', () => {
+      settings[key] = input.type === 'checkbox' ? input.checked : +input.value
+      if (key === 'rotate' && !input.checked) clearTimeout(_rotateResumeTimer)
+      applySettings()
+      saveSettings()
+      if (key === 'sim' && mode === 'sky' && sel?.type === 'star') showStarPanel(sel.star)
+      if (key === 'orbit') updateHud()
+    })
+  })
+
+  const brBtn   = $('bugreport-btn')
+  const brPanel = $('bugreport-panel')
+  const brText  = $('bugreport-text')
+  brBtn.addEventListener('click', e => {
+    e.stopPropagation()
+    sPanel.classList.remove('show'); hPanel.classList.remove('show')
+    brPanel.classList.toggle('show')
+  })
+  document.addEventListener('click', e => {
+    if (!brPanel.contains(e.target) && e.target !== brBtn) brPanel.classList.remove('show')
+  })
+
+  const FORMSPREE_ENDPOINT = 'https://formspree.io/f/xjgdzbpv'
+  const brSend = $('bugreport-send')
+  brSend.addEventListener('click', async () => {
+    if (!brText.value.trim()) { brText.focus(); return }
+    const object = mode === 'system' ? `system: ${sys.model.title}${selPlanet ? ` / ${selPlanet.p.name}` : ''}`
+      : sel?.type === 'con' ? `constellation: ${sel.con.name}` : sel?.type === 'star' ? `star: ${starTitle(sel.star)}` : sel?.type === 'host' ? `host: ${sel.sys.host}` : 'sky'
+    brSend.textContent = 'Sending…'
+    brSend.disabled = true
+    try {
+      const res = await fetch(FORMSPREE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ message: brText.value, app: 'constellations', object, url: location.href, userAgent: navigator.userAgent }),
+      })
+      if (!res.ok) throw new Error(res.status)
+      brSend.textContent = 'Sent ✓'
+      brText.value = ''
+      setTimeout(() => { brPanel.classList.remove('show'); brSend.textContent = 'Send'; brSend.disabled = false }, 1200)
+    } catch {
+      brSend.textContent = 'Failed — try again'
+      brSend.disabled = false
+    }
+  })
+
+  $('data-credits').insertAdjacentText('beforeend', ` Snapshot ${D.built}.`)
+})()
+
+// Boot
+configureControls()
+applySettings()
+renderLegend()
+updateDrawer()
+if (location.hash.length > 2) await applyRoute(true)
+if (!sel && mode === 'sky') {
+  const ori = CONS.find(c => c.abbr === 'Ori')
+  setSkyCamera(ori.dir)
+  camera.fov = fovTarget = 70
+  camera.updateProjectionMatrix()
+  selectCon(ori)
+}
+</script>
+</body>
+</html>
