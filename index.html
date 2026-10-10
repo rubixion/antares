@@ -525,7 +525,7 @@
     <div class="help-hint">Type a constellation <em>Orion</em>, a star <em>Betelgeuse</em>, <em>alpha centauri</em>, <em>HIP 27989</em>, a planet host <em>TRAPPIST-1</em>, or a planet <em>Kepler-22 b</em>, then press Enter.</div>
     <div class="help-divider"></div>
     <div class="s-lbl" style="margin-bottom:6px">Data</div>
-    <div class="help-hint" id="data-credits">Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a>. Figures &amp; IAU boundaries: <a href="https://github.com/Stellarium/stellarium" target="_blank" rel="noopener">Stellarium</a>. Planets: <a href="https://exoplanetarchive.ipac.caltech.edu" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Values marked ~ are estimates.</div>
+    <div class="help-hint" id="data-credits">Stars: <a href="https://github.com/astronexus/HYG-Database" target="_blank" rel="noopener">HYG v4.1</a>. Figures &amp; IAU boundaries: <a href="https://github.com/Stellarium/stellarium" target="_blank" rel="noopener">Stellarium</a>. Planets: <a href="https://exoplanetarchive.ipac.caltech.edu" target="_blank" rel="noopener">NASA Exoplanet Archive</a>. Multiple stars: <a href="https://vizier.cds.unistra.fr/viz-bin/VizieR?-source=J/MNRAS/389/869" target="_blank" rel="noopener">Eggleton &amp; Tokovinin 2008</a>. Values marked ~ are estimates.</div>
   </div>
 
 </div>
@@ -630,7 +630,7 @@ const CONS = D.cons.map((c, i) => ({ ...c, i, dir: new THREE.Vector3() }))
 const STARS = D.stars.map((r, i) => ({
   i, hip: r[0], ra: r[1], dec: r[2], mag: r[3], ci: r[4], dist: r[5], spect: r[6], name: r[7], greek: r[8],
   flam: r[9], con: r[10], hd: r[11], hr: r[12], teff: r[13], lum: r[14], rad: r[15], sys: r[16],
-  dir: dirOf(r[1], r[2]),
+  mult: r[17], tree: r[18] || null, dir: dirOf(r[1], r[2]),
 }))
 const SYSTEMS = D.systems.map((r, i) => ({
   i, host: r[0], hip: r[1], ra: r[2], dec: r[3], dist: r[4], vmag: r[5], spect: r[6], teff: r[7], rad: r[8],
@@ -695,6 +695,7 @@ const KIND = {
   neptune: { label: 'Neptune-like',  css: '#6f8ff0' },
   giant:   { label: 'Gas giant',     css: '#d8b48a' },
   hot:     { label: 'Hot Jupiter',   css: '#ff7a45' },
+  star:    { label: 'Companion star', css: '#ffaa00' },
 }
 function planetKind(p) {
   const R = p.r ?? 3
@@ -703,6 +704,23 @@ function planetKind(p) {
   if (R >= 1.25) return 'super'
   return 'rocky'
 }
+const MULT_WORD = { 2: 'Binary star', 3: 'Triple star', 4: 'Quadruple star', 5: 'Quintuple star', 6: 'Sextuple star', 7: 'Septuple star' }
+const multWord = n => MULT_WORD[n] ?? `${n}-star system`
+// Configuration trees (Eggleton & Tokovinin 2008, parsed at build time):
+//   leaf ['L', spectral, teff, mass, radius, flags]  flags 1 unseen, 2 from a table, 4 white dwarf
+//   pair ['N', A, B, period d, a AU, e, flags]       flags 1 projected separation, 2 orbit unknown
+// A is the brighter side. Names follow the usual hierarchy: A / B, then Aa / Ab, then Aa1 / Aa2.
+const childName = (name, k) => !name ? 'AB'[k] : name.length === 1 ? name + 'ab'[k] : name + '12'[k]
+const primaryOf = n => n[0] === 'L' ? n : primaryOf(n[1])
+const treeMass = n => n[0] === 'L' ? n[3] : treeMass(n[1]) + treeMass(n[2])
+function treeLeaves(n, name = '', out = []) {
+  if (n[0] === 'L') { out.push({ leaf: n, name }); return out }
+  treeLeaves(n[1], childName(name, 0), out)
+  treeLeaves(n[2], childName(name, 1), out)
+  return out
+}
+const starSpect = s => (s.tree && primaryOf(s.tree)[1] && primaryOf(s.tree)[1] !== '?' && primaryOf(s.tree)[1]) || s.spect
+const leafLabel = l => l[1] === '?' ? 'unseen companion' : l[1] || 'star'
 const hzOf = L => [Math.sqrt(L / 1.1), Math.sqrt(L / 0.53)] // conservative habitable zone, AU
 
 // Renderer (same WebGPU-first setup as the molecule viewer)
@@ -923,27 +941,34 @@ sysGroup.add(new THREE.HemisphereLight(0x9fb2ff, 0x121225, 0.6))
 const starLight = new THREE.PointLight(0xffffff, 3.2, 0, 0)
 sysGroup.add(starLight)
 
-const uStarColor = uniform(new THREE.Color(1, 1, 1))
-const starSurface = (() => {
+function surfaceColor(teff, out) {
+  const hsl = {}
+  out.copy(bbColor(teff)).getHSL(hsl)
+  return out.setHSL(hsl.h, Math.min(1, hsl.s * 1.35), hsl.l) // a touch more saturated so warm stars read as warm
+}
+function makeStarSurface(uCol) {
   const mat = new THREE.MeshBasicNodeMaterial()
   const p = positionLocal.normalize()
   const gran = mx_fractal_noise_float(p.mul(7.0).add(timerLocal(0.04)), 3, 2.0, 0.5).mul(0.5).add(0.5)
   const limb = normalView.z.max(0).pow(0.45)
-  mat.colorNode = uStarColor.mul(gran.mul(0.32).add(0.72)).mul(limb.mul(0.5).add(0.5)) // stays below 1 so the colour survives
+  mat.colorNode = uCol.mul(gran.mul(0.3).add(0.68)).mul(limb.mul(0.55).add(0.45)) // stays below 1 so the colour survives
   return mat
-})()
-const glowMat = (() => {
+}
+function makeGlow(uCol) {
   const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
   const d = uv().sub(0.5).length().mul(2)
-  mat.colorNode = uStarColor
-  mat.opacityNode = d.oneMinus().saturate().pow(2.6).mul(0.9)
+  mat.colorNode = uCol
+  mat.opacityNode = d.oneMinus().saturate().pow(3.0).mul(0.55)
   return mat
-})()
+}
+const uStarColor = uniform(new THREE.Color(1, 1, 1))
+const starSurface = makeStarSurface(uStarColor)
+const glowMat = makeGlow(uStarColor)
 const coronaMat = (() => {
   const mat = new THREE.SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
   const d = uv().sub(0.5).length().mul(2)
   mat.colorNode = uStarColor
-  mat.opacityNode = d.oneMinus().saturate().pow(4.0).mul(0.22)
+  mat.opacityNode = d.oneMinus().saturate().pow(4.0).mul(0.06)
   return mat
 })()
 const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), starSurface)
@@ -954,6 +979,7 @@ sysGroup.add(sunMesh, sunGlow, sunCorona)
 
 const orbitMat    = new THREE.LineBasicNodeMaterial({ color: 0x6482d2, transparent: true, opacity: 0.26, depthWrite: false })
 const orbitSelMat = new THREE.LineBasicNodeMaterial({ color: 0xa9bdf5, transparent: true, opacity: 0.85, depthWrite: false })
+const compOrbitMat = new THREE.LineBasicNodeMaterial({ color: 0xffaa00, transparent: true, opacity: 0.32, depthWrite: false })
 const hzMat = new THREE.MeshBasicNodeMaterial({ color: 0x55cc80, transparent: true, opacity: 0.075, depthWrite: false, side: THREE.DoubleSide })
 const hzEdgeMat = new THREE.LineBasicNodeMaterial({ color: 0x55cc80, transparent: true, opacity: 0.22, depthWrite: false })
 
@@ -1063,8 +1089,9 @@ function systemModel(ref) {
   const model = {
     ref, key: st ? `hip/${st.hip}` : `host/${sy.host}`, title,
     sub: st ? desig(st) : (sy.spect || 'Planet host'),
-    star: { name: title, teff, rad: rad ?? 1, lum, mass, spect: sy?.spect || st?.spect || '', est: !sy, radKnown: rad != null, massKnown: sy?.mass != null },
+    star: { name: title, teff, rad: rad ?? 1, lum, mass, spect: sy?.spect || (st && starSpect(st)) || '', est: !sy, radKnown: rad != null, massKnown: sy?.mass != null },
     dist: sy?.dist ?? st?.dist ?? null, con: sy ? sy.con : st.con, sys: sy, st, simulated: false, planets: [],
+    mult: Math.max(st?.mult ?? 1, sy?.snum ?? 1), tree: st?.tree ?? null,
   }
   if (sy) {
     model.planets = sy.planets.map((p, i) => {
@@ -1072,7 +1099,7 @@ function systemModel(ref) {
       const short = p.name.startsWith(host + ' ') ? p.name.slice(host.length + 1) : prettyName(p.name)
       return { ...p, name: prettyName(p.name), short, kind: planetKind(p), seed: i + 1 }
     })
-  } else if (settings.sim) {
+  } else if (settings.sim && model.mult === 1) { // companions would destabilise most invented orbits
     model.simulated = true
     model.planets = simulatePlanets(st, lum, mass, rad ?? 1)
   }
@@ -1119,16 +1146,20 @@ function buildSystem(model) {
 
   const st = model.star
   const tint = starTint(st.teff)
-  uStarColor.value.copy(bbColor(st.teff))
+  surfaceColor(st.teff, uStarColor.value)
   starLight.color.copy(tint)
   const rs = clamp(0.8 + 0.28 * Math.log10(st.rad || 1), 0.45, 1.8)
   sunMesh.scale.setScalar(rs)
-  sunGlow.scale.setScalar(rs * 6.5)
-  sunCorona.scale.setScalar(rs * 16)
+  sunGlow.scale.setScalar(rs * 4.5)
+  sunCorona.scale.setScalar(rs * 10)
 
   const ps = [...model.planets].sort((a, b) => a.a - b.a)
   const [hzIn, hzOut] = hzOf(st.lum)
-  const scale = makeScale(ps.length ? ps.map(p => p.a) : [Math.sqrt(st.lum)], rs)
+  const tree = model.tree
+  const compA = []
+  for (let n = tree; n && n[0] === 'N'; n = n[1]) compA.push(n[4] ?? 1) // pairs anchored on the primary
+  const knots = [...ps.map(p => p.a), ...compA].sort((a, b) => a - b)
+  const scale = makeScale(knots.length ? knots : [Math.sqrt(st.lum)], rs)
   const objects = []
   const rng = mulberry32(model.key.length * 7919 + (model.planets[0]?.a ?? 1) * 1e6)
 
@@ -1176,14 +1207,78 @@ function buildSystem(model) {
     const inHZ = p.a >= hzIn && p.a <= hzOut
     return { p, pr, e, omega, M0, obj, mesh, hit, orbit, el: label, label, inHZ, shown: null }
   })
+  // Companion stars: relative orbits, each pair's fainter side circling its brighter side's primary.
+  // Pairs on the primary share the planets' scale; pairs inside a companion get a compact local one.
+  const comps = []
+  if (tree && tree[0] === 'N') {
+    const root = new THREE.Group()
+    objects.push(root)
+    const rsOf = R => clamp(0.8 + 0.28 * Math.log10(R || 1), 0.3, 1.8)
+    const walk = (node, name, anchor, global) => {
+      if (node[0] === 'L') return
+      const [, A, B, P, ax, e0, f] = node
+      walk(A, childName(name, 0), anchor, global)
+      const bName = childName(name, 1)
+      const leafB = primaryOf(B)
+      const leafName = B[0] === 'L' ? bName : treeLeaves(B, bName)[0].name
+      const bGroup = new THREE.Group()
+      anchor.add(bGroup)
+      const unseen = leafB[5] & 1
+      const r = rsOf(leafB[4]) * (unseen ? 0.6 : 1)
+      const uCol = uniform(unseen ? new THREE.Color(0x8a93a8) : surfaceColor(leafB[2] || 3600, new THREE.Color())) // unseen: a grey ghost, colour unknown
+      const surf = makeStarSurface(uCol); surf.userData.own = true
+      const glow = makeGlow(uCol); glow.userData.own = true
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 24), surf)
+      const halo = new THREE.Sprite(glow); halo.scale.setScalar(r * (unseen ? 2.5 : 4.5)); halo.renderOrder = 5
+      if (unseen) surf.colorNode = surf.colorNode.mul(0.55)
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(Math.max(r * 1.6, 0.4), 8, 6), hzMat)
+      hit.visible = false
+      bGroup.add(mesh, halo, hit)
+      const a = ax ?? 1
+      const e = clamp(e0 ?? 0, 0, 0.95)
+      const mTot = treeMass(node)
+      const per = P ?? 365.25 * Math.sqrt(a ** 3 / Math.max(mTot, 0.1))
+      const rsA = global ? rs : rsOf(primaryOf(A)[4])
+      const local = d => rsA + r + 0.35 + 1.25 * Math.log10(1 + d / 0.02)
+      const fn = global ? scale : local
+      const omega = rng() * Math.PI * 2
+      const pts = []
+      for (let k = 0; k <= 256; k++) {
+        const nu = k / 256 * Math.PI * 2
+        const rr = fn(a * (1 - e * e) / (1 + e * Math.cos(nu)))
+        pts.push(new THREE.Vector3(Math.cos(nu + omega) * rr, 0, -Math.sin(nu + omega) * rr))
+      }
+      const orbit = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), compOrbitMat)
+      orbit.renderOrder = 1
+      anchor.add(orbit)
+      const label = document.createElement('div')
+      label.className = 'lbl-planet'
+      label.textContent = `${model.title} ${leafName}`
+      labelsEl.appendChild(label)
+      planetLabels.push(label)
+      comps.push({
+        comp: true, leaf: leafB, leafName, pairName: bName, node, around: global ? model.title : `${model.title} ${treeLeaves(A, childName(name, 0))[0].name}`,
+        p: { name: `${model.title} ${leafName}`, short: leafName, a, per, e, kind: 'star', flags: f },
+        pr: r, e, omega, M0: rng() * Math.PI * 2, obj: bGroup, mesh, hit, orbit, el: label, label, inHZ: false, shown: null, scaleFn: fn, global,
+      })
+      walk(B, bName, bGroup, false)
+    }
+    walk(tree, '', root, true)
+  }
   for (const o of objects) sysGroup.add(o)
 
-  const outer = live.length ? Math.max(...live.map(l => scale(l.p.a * (1 + l.e)))) : r2
-  const span = live.length ? Math.max(outer * 1.15, rs * 5.5, Math.min(r2 * 0.9, outer * 1.6)) : Math.max(r2, rs * 4)
-  const minP = live.length ? Math.min(...live.map(l => l.p.per ?? 365)) : 365
-  sys = { model, planets: live, objects, scale, span, rs, hz: [hzIn, hzOut], days: 0, dps: minP / 8 }
+  const outerOf = ls => ls.map(l => l.scaleFn ? l.scaleFn(l.p.a * (1 + l.e)) : scale(l.p.a * (1 + l.e)))
+  const globals = [...live, ...comps.filter(c => c.global)]
+  const outer = globals.length ? Math.max(...outerOf(globals)) : r2
+  const span = globals.length ? Math.max(outer * 1.15, rs * 5.5, Math.min(r2 * 0.9, outer * 1.6)) : Math.max(r2, rs * 4)
+  const periods = (live.length ? live : comps).map(l => l.p.per ?? 365)
+  const minP = periods.length ? Math.min(...periods) : 365
+  sys = { model, planets: [...live, ...comps], comps, objects, scale, span, rs, hz: [hzIn, hzOut], days: 0, dps: minP / 8 }
   positionPlanets()
 }
+
+// Wider when companion stars set the span, so a wide companion is not hidden behind the panel
+const homeView = () => sys.comps.some(c => c.global) ? new THREE.Vector3(0, sys.span * 0.78, sys.span * 1.75) : new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35)
 
 function solveKepler(M, e) {
   let E = e < 0.8 ? M : Math.PI
@@ -1197,7 +1292,7 @@ function positionPlanets() {
     const M = (l.M0 + 2 * Math.PI * sys.days / per) % (2 * Math.PI)
     const E = solveKepler(M, l.e)
     const nu = 2 * Math.atan2(Math.sqrt(1 + l.e) * Math.sin(E / 2), Math.sqrt(1 - l.e) * Math.cos(E / 2))
-    const rr = sys.scale(l.p.a * (1 - l.e * Math.cos(E)))
+    const rr = (l.scaleFn ?? sys.scale)(l.p.a * (1 - l.e * Math.cos(E)))
     l.obj.position.set(Math.cos(nu + l.omega) * rr, 0, -Math.sin(nu + l.omega) * rr)
   }
 }
@@ -1403,7 +1498,7 @@ async function enterSystem(ref, { push = true, planetName = null } = {}) {
   camera.updateProjectionMatrix()
   configureControls()
   applySettings()
-  const p1 = new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35)
+  const p1 = homeView()
   const p0 = p1.clone().multiplyScalar(2.2)
   camera.position.copy(REDUCED ? p1 : p0)
   controls.target.set(0, 0, 0)
@@ -1591,6 +1686,14 @@ function planetRows(planets, prefix) {
   return planets.map((p, i) => row(prefix ? `${prefix}${i}` : null, KIND[p.kind].css, p.short ?? p.name, KIND[p.kind].label, `${fmtSig(p.a, 3)} AU`)).join('')
 }
 
+function starRows(s, prefix = null) {
+  if (!s.tree) return `<div class="ap-empty">${multWord(s.mult)}. The catalogue gives no configuration for the companions.</div>`
+  return treeLeaves(s.tree).map(({ leaf, name }) => {
+    const go = prefix && sys ? sys.planets.findIndex(l => l.comp && l.leaf === leaf) : -1
+    return row(go >= 0 ? `${prefix}${go}` : null, leaf[5] & 1 ? '#8a93a8' : cssColor(starTint(leaf[2] || 3600)), name || 'A', leafLabel(leaf), leaf[3] ? `~${fmtSig(leaf[3], 2)} M☉` : '')
+  }).join('') + '<div class="ap-foot">Eggleton &amp; Tokovinin (2008). Masses ~ estimated from spectral types.</div>'
+}
+
 function enterAction(label, note) {
   return `<div class="ap-action"><button class="btn" data-enter>${label}</button><span class="ap-action-note">${note}</span></div>`
 }
@@ -1599,10 +1702,13 @@ function showStarPanel(s) {
   const c = CONS[s.con]
   const sy = s.sys >= 0 ? SYSTEMS[s.sys] : null
   const hexc = cssColor(starTint(s.teff))
-  setHeader(s.greek || s.flam || '★', hexc, starTitle(s), starClass(s.spect, s.teff))
+  setHeader(s.greek || s.flam || '★', hexc, starTitle(s), starClass(starSpect(s), s.teff))
   const n = sy?.planets.length ?? 0
   const estimated = !sy
-  const note = n ? `${planetsWord(n)} confirmed` : (settings.sim ? 'No confirmed planets.<br>Shows a simulated system.' : 'No confirmed planets.<br>Shows the star alone.')
+  const multi = s.mult > 1
+  const note = n ? `${planetsWord(n)} confirmed${multi ? `<br>${multWord(s.mult).toLowerCase()}` : ''}`
+    : multi ? `No confirmed planets.<br>Shows the ${s.tree ? treeLeaves(s.tree).length : s.mult} stars.`
+    : (settings.sim ? 'No confirmed planets.<br>Shows a simulated system.' : 'No confirmed planets.<br>Shows the star alone.')
   const L = sy?.lum ?? s.lum
   showPanel([
     enterAction('ENTER SYSTEM →', note),
@@ -1612,15 +1718,17 @@ function showStarPanel(s) {
       kv('Apparent mag', s.mag.toFixed(2)) +
       kv('Distance', s.dist != null ? `${fmtLy(s.dist)}` : 'unknown') +
       kv('Right ascension', fmtRA(s.ra)) +
-      kv('Declination', fmtDec(s.dec)), true),
+      kv('Declination', fmtDec(s.dec)) +
+      kv('System', multi ? multWord(s.mult) : 'Single star', multi ? 'pos' : ''), true),
+    multi ? colSection(`Stars · ${s.mult}`, starRows(s), true) : '',
     colSection('Physical',
-      kv('Spectral type', esc(s.spect || '—')) +
+      kv('Spectral type', esc(starSpect(s) || '—')) +
       kv('Temperature', `${est(estimated)}${fmtN(s.teff, 0)} K`) +
       kv('Luminosity', L != null ? `${est(estimated)}${fmtSig(L, 3)} L☉` : '—') +
       kv('Radius', s.rad != null ? `${est(!sy?.rad)}${fmtSig(s.rad, 3)} R☉` : '—') +
       (sy?.mass != null ? kv('Mass', `${fmtSig(sy.mass, 3)} M☉`) : '') +
       kv('Colour index B−V', s.ci != null ? s.ci.toFixed(2) : '—') +
-      (estimated ? '<div class="ap-foot">~ derived from colour, spectral type and parallax</div>' : ''), true),
+      (estimated ? `<div class="ap-foot">~ derived from colour, spectral type and parallax${multi ? '; blends the light of all its stars' : ''}</div>` : ''), true),
     colSection('Catalog',
       kv('HIP', s.hip || '—') + kv('HD', s.hd || '—') + kv('HR', s.hr || '—')),
     sy ? colSection(`Planets · ${n}`, planetRows(sy.planets.map(p => ({ ...p, short: prettyName(p.name), kind: planetKind(p) }))), true) : '',
@@ -1655,12 +1763,15 @@ function showSystemPanel() {
   const m = sys.model, st = m.star
   const hexc = cssColor(starTint(st.teff))
   const sym = m.sol ? '☉' : m.st ? (m.st.greek || m.st.flam || '★') : '◎'
-  setHeader(sym, hexc, m.title, m.planets.length ? `${m.simulated ? 'Simulated' : 'Planetary'} system · ${planetsWord(m.planets.length)}` : 'No known planets')
-  const ordered = sys.planets.map(l => l.p)
+  const multi = m.mult > 1
+  setHeader(sym, hexc, m.title, m.planets.length ? `${m.simulated ? 'Simulated' : 'Planetary'} system · ${planetsWord(m.planets.length)}`
+    : multi ? `${multWord(m.mult)} · no known planets` : 'No known planets')
+  const ordered = sys.planets.filter(l => !l.comp).map(l => l.p)
   const [h1, h2] = sys.hz
   const inHZ = sys.planets.filter(l => l.inHZ).map(l => l.p.short ?? l.p.name)
   const note = m.simulated
     ? '<div class="ap-note">Simulated system. This star has no confirmed planets; these orbits are generated from its estimated luminosity and mass, for illustration only.</div>'
+    : (!m.planets.length && multi) ? `<div class="ap-note">${multWord(m.mult)} with no confirmed planets. No planets are simulated here: companion stars this close would make most orbits unstable.${m.tree ? '' : ' The catalogue gives no orbits for the companions, so only the primary is drawn.'}</div>`
     : (!m.planets.length ? '<div class="ap-note">No confirmed planets. Turn on Simulated planets in Settings to imagine one.</div>' : '')
   showPanel([
     note,
@@ -1672,7 +1783,9 @@ function showSystemPanel() {
       kv('Radius', `${est(st.est || st.radKnown === false)}${fmtSig(st.rad, 3)} R☉`) +
       kv('Mass', `${est(!m.sol && !st.massKnown)}${fmtSig(st.mass, 3)} M☉`) +
       (m.sol ? '' : kv('Distance', fmtLy(m.dist))) +
-      (m.con != null ? kv('Constellation', esc(CONS[m.con].name), 'cyan') : ''), true),
+      (m.con != null ? kv('Constellation', esc(CONS[m.con].name), 'cyan') : '') +
+      (multi ? `<div class="ap-foot">Luminosity and radius blend the light of all ${m.mult} stars</div>` : ''), true),
+    multi && m.st ? colSection(`Stars · ${m.mult}`, starRows(m.st, 'p:'), true) : '',
     ordered.length ? colSection(`${m.simulated ? 'Simulated planets' : 'Planets'} · ${ordered.length}`, planetRows(ordered, 'p:'), true) : '',
     colSection('Habitable Zone',
       kv('Inner edge', `${fmtSig(h1, 3)} AU`) +
@@ -1682,7 +1795,29 @@ function showSystemPanel() {
   ].join(''))
 }
 
+function showCompanionPanel(l) {
+  const leaf = l.leaf, f = leaf[5], nf = l.node[6]
+  setHeader(l.leafName, f & 1 ? '#8a93a8' : cssColor(starTint(leaf[2] || 3600)), l.p.name, f & 1 ? 'Unseen companion' : f & 4 ? 'White dwarf' : starClass(leaf[1], leaf[2]))
+  const sepLbl = nf & 1 ? 'Separation (projected)' : 'Semi-major axis'
+  showPanel([
+    f & 1 ? '<div class="ap-note">Seen only in the spectrum, not imaged. Its colour, size and mass here are guesses.</div>' : '',
+    nf & 2 ? '<div class="ap-note">The catalogue gives no orbit for this pair, so its distance here is a placeholder.</div>' : '',
+    colSection('Star',
+      kv('Spectral type', esc(f & 1 ? 'unknown' : leaf[1] || '—')) +
+      kv('Temperature', leaf[2] ? `~${fmtN(leaf[2])} K` : '—') +
+      kv('Mass', leaf[3] ? `~${fmtSig(leaf[3], 2)} M☉` : '—') +
+      kv('Radius', leaf[4] ? `~${fmtSig(leaf[4], 2)} R☉` : '—'), true),
+    colSection('Orbit',
+      kv('Orbits', esc(l.around)) +
+      kv(sepLbl, nf & 2 ? 'unknown' : `${nf & 1 ? '~' : ''}${fmtSig(l.p.a, 3)} AU`) +
+      kv('Period', l.node[3] ? fmtPeriod(l.node[3]) : nf & 2 ? 'unknown' : `~${fmtPeriod(l.p.per)}`) +
+      kv('Eccentricity', l.node[5] != null ? fmtSig(l.node[5], 2) : '—') +
+      '<div class="ap-foot">Configuration from Eggleton &amp; Tokovinin (2008). Orbits drawn relative to the brighter star, on a compressed scale.</div>', true),
+  ].join(''))
+}
+
 function showPlanetPanel(l) {
+  if (l.comp) return showCompanionPanel(l)
   const p = l.p
   const k = KIND[p.kind]
   const sym = p.sol ? { Mercury:'☿', Venus:'♀', Earth:'⊕', Mars:'♂', Jupiter:'♃', Saturn:'♄', Uranus:'⛢', Neptune:'♆' }[p.name] : (p.short && p.short.length <= 3 ? p.short : '●')
@@ -1743,10 +1878,11 @@ function renderLegend() {
        <div class="leg-row"><div class="leg-ring"></div>Planet host</div>`
   } else {
     leg.innerHTML = `<div class="leg-title">Planets</div>` +
-      Object.values(KIND).map(k => `<div class="leg-row"><div class="leg-dot" style="background:${k.css}"></div>${k.label}</div>`).join('') +
+      Object.values(KIND).filter(k => k !== KIND.star).map(k => `<div class="leg-row"><div class="leg-dot" style="background:${k.css}"></div>${k.label}</div>`).join('') +
       `<div class="leg-title">Zones</div>
        <div class="leg-row"><div class="leg-band"></div>Habitable zone</div>
-       <div class="leg-row"><div class="leg-bond"></div>Orbit</div>`
+       <div class="leg-row"><div class="leg-bond"></div>Orbit</div>` +
+      (sys?.comps.length ? `<div class="leg-row"><div class="leg-bond" style="background:rgba(255,170,0,0.6)"></div>Companion star orbit</div>` : '')
   }
 }
 
@@ -1773,7 +1909,8 @@ function updateDrawer() {
     if (sel?.type === 'star') {
       const s = sel.star, n = s.sys >= 0 ? SYSTEMS[s.sys].planets.length : 0
       chem.innerHTML = (n ? `<span class="bd-badge nonpolar">${planetsWord(n)}</span>` : `<span class="bd-badge polar">No known planets</span>`) +
-        chemItem('Star', esc(starTitle(s))) + chemItem('Distance', fmtLy(s.dist)) + chemItem('Spectral', esc(s.spect || '—')) + chemItem('Magnitude', s.mag.toFixed(2))
+        (s.mult > 1 ? `<span class="bd-badge ionic">${multWord(s.mult)}</span>` : '') +
+        chemItem('Star', esc(starTitle(s))) + chemItem('Distance', fmtLy(s.dist)) + chemItem('Spectral', esc(starSpect(s) || '—')) + chemItem('Magnitude', s.mag.toFixed(2))
     } else if (sel?.type === 'host') {
       const sy = sel.sys
       chem.innerHTML = `<span class="bd-badge nonpolar">${planetsWord(sy.planets.length)}</span>` +
@@ -1798,7 +1935,7 @@ function updateDrawer() {
     _hud = ''
     updateHud()
     const p = selPlanet?.p
-    const badge = m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`
+    const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
     if (p) {
       chem.innerHTML = badge + chemItem('Planet', esc(p.name)) + chemItem('Type', KIND[p.kind].label) +
         chemItem('Orbit', `${fmtSig(p.a, 3)} AU`) + chemItem('Period', fmtPeriod(p.per)) + (selPlanet.inHZ ? '<span class="bd-badge nonpolar">Habitable zone</span>' : '')
@@ -2132,7 +2269,7 @@ function resetView() {
     animateLook(target, 60)
   } else {
     selectPlanet(null)
-    anim = { kind: 'arrive', p0: camera.position.clone(), p1: new THREE.Vector3(0, sys.span * 0.62, sys.span * 1.35), t0: performance.now(), dur: REDUCED ? 1 : 900 }
+    anim = { kind: 'arrive', p0: camera.position.clone(), p1: homeView(), t0: performance.now(), dur: REDUCED ? 1 : 900 }
   }
 }
 

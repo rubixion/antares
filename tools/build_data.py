@@ -3,11 +3,12 @@
   HYG v4.1 star catalog         https://github.com/astronexus/HYG-Database (CC BY-SA 4.0)
   Stellarium "modern" sky culture https://github.com/Stellarium/stellarium (figures, names, IAU boundaries)
   NASA Exoplanet Archive        https://exoplanetarchive.ipac.caltech.edu (pscomppars, every confirmed planet)
+  Eggleton & Tokovinin (2008)   VizieR J/MNRAS/389/869, multiplicity of every star brighter than V = 6
 
 Usage:  python tools/build_data.py [cache_dir]
 Downloads are cached in cache_dir (default tools/.cache). Delete it to refresh the snapshot.
 """
-import csv, json, math, os, sys, urllib.parse, urllib.request
+import csv, json, math, os, re, sys, urllib.parse, urllib.request
 from collections import defaultdict
 from datetime import date
 
@@ -26,6 +27,10 @@ SOURCES = {
     'modern.json': 'https://raw.githubusercontent.com/Stellarium/stellarium/master/skycultures/modern/index.json',
     'planets.json': 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?format=json&query='
                     + urllib.parse.quote(f'select {PLANET_COLS} from pscomppars'),
+    'multiplicity.tsv': 'https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=J/MNRAS/389/869/table1'
+                        '&-out=mHR,N,u_N,Conf&-out.max=unlimited',
+    'multiplicity_xref.tsv': 'https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=J/MNRAS/389/869/table2'
+                             '&-out=mHR,HIP&-out.max=unlimited',
 }
 
 GREEK = dict(Alp='α', Bet='β', Gam='γ', Del='δ', Eps='ε', Zet='ζ', Eta='η', The='θ', Iot='ι', Kap='κ', Lam='λ',
@@ -56,7 +61,11 @@ def fetch(name):
     path = os.path.join(CACHE, name)
     if not os.path.exists(path):
         print('downloading', name)
-        urllib.request.urlretrieve(SOURCES[name], path)
+        try:
+            urllib.request.urlretrieve(SOURCES[name], path)
+        except urllib.error.URLError:  # some Python installs lack the CA chain VizieR uses; curl has the OS store
+            import subprocess
+            subprocess.run(['curl', '-sSfL', '-o', path, SOURCES[name]], check=True)
     return path
 
 
@@ -281,6 +290,175 @@ def boundary_polylines(edges):
     return out
 
 
+# Multiple stars (Eggleton & Tokovinin 2008)
+#
+# Each system is a nested configuration such as Shaula's "((B1.5IV + ?; 5.953d  e=.26) + B2IV; 1053d, e=.12)":
+# a pair is "(A + B; orbit)", a component may carry its V magnitude ("5.82G1IV", "6.49(...)"), and the
+# orbit is a period (d / y), an angular separation (") and/or an eccentricity. Components can be "?"
+# (seen only in the spectrum), "sim" (similar to its partner) or "wd".
+#
+# Output, compact for data.js:
+#   leaf ['L', spectral, teff K, mass M_sun, radius R_sun, flags]  flags: 1 unseen, 2 from a table, 4 white dwarf
+#   pair ['N', A, B, period d | None, a AU | None, e | None, flags]  flags: 1 a is a projected separation,
+#                                                                            2 orbit unknown
+
+# Main-sequence anchors by absolute V: (M_V, Teff, mass, radius), after Pecaut & Mamajek (2013)
+MS_TABLE = [(-4.0, 30000, 15.0, 6.5), (-2.4, 20600, 8.0, 4.0), (-1.1, 15700, 5.0, 3.0), (0.0, 10700, 3.0, 2.3),
+            (0.8, 9700, 2.3, 1.9), (1.9, 8100, 1.8, 1.7), (2.6, 7220, 1.6, 1.5), (3.4, 6510, 1.3, 1.3),
+            (4.4, 5920, 1.1, 1.1), (4.8, 5770, 1.0, 1.0), (5.9, 5280, 0.9, 0.85), (7.3, 4450, 0.72, 0.7),
+            (8.9, 3850, 0.6, 0.6), (9.9, 3560, 0.47, 0.47), (12.3, 3060, 0.18, 0.2), (16.0, 2650, 0.1, 0.11)]
+
+
+def ms_by(column, value, key):
+    rows = sorted(MS_TABLE, key=lambda r: r[column])
+    return float(np.interp(value, [r[column] for r in rows], [r[key] for r in rows]))
+
+
+def lum_class(spec):
+    m = re.search(r'[OBAFGKM]\d*(?:\.\d+)?\s*:?\s*(Iab|Ia|Ib|III|II|IV|I|VI|V)', spec or '')
+    return m.group(1) if m else None
+
+
+class ConfParser:
+    def __init__(self, text):
+        self.t, self.i = text, 0
+
+    def peek(self):
+        while self.i < len(self.t) and self.t[self.i] == ' ':
+            self.i += 1
+        return self.t[self.i] if self.i < len(self.t) else ''
+
+    def item(self):
+        self.peek()
+        mag = None
+        if m := re.match(r'\d+\.?\d*|\.\d+', self.t[self.i:]):
+            mag, self.i = float(m.group()), self.i + m.end()
+        if self.peek() == '(':
+            self.i += 1
+            a = self.item()
+            if self.peek() != '+':
+                raise ValueError('expected +')
+            self.i += 1
+            b = self.item()
+            if self.peek() != ';':
+                raise ValueError('expected ;')
+            depth, j = 0, self.i + 1
+            while j < len(self.t) and not (self.t[j] == ')' and depth == 0):
+                depth += {'(': 1, ')': -1}.get(self.t[j], 0)
+                j += 1
+            orbit, self.i = self.t[self.i + 1:j], j + 1
+            return {'pair': (a, b), 'orbit': orbit, 'mag': mag}
+        j = self.i
+        while j < len(self.t) and self.t[j] not in '+;)':
+            j += 1
+        tok, self.i = self.t[self.i:j].strip(), j
+        return {'leaf': tok, 'mag': mag}
+
+
+def parse_conf(text):
+    text = re.sub(r'\s*\+\s*planets?\s*$', '', text.strip())
+    if not text.startswith('('):
+        return None
+    try:
+        p = ConfParser(text)
+        tree = p.item()
+    except ValueError:
+        return None
+    return tree if p.peek() == '' and 'pair' in tree else None
+
+
+def orbit_values(orbit):
+    period = sep = e = None
+    if m := re.search(r'([\d.]*\d):?\s*d\b', orbit):
+        period = float(m.group(1))
+    elif m := re.search(r'([\d.]*\d):?\s*y\b', orbit):
+        period = float(m.group(1)) * 365.25
+    if m := re.search(r'([\d.]*\d)"', orbit):
+        sep = float(m.group(1))
+    if m := re.search(r'e=([\d.]*\d)', orbit):
+        e = float(m.group(1))
+    return period, sep, e
+
+
+def leaf_physics(tok, mag, plx):
+    """(spectral label, teff, mass, radius, flags) for one component; plx in arcsec."""
+    if tok in ('?', 'sim'):
+        return tok, None, None, None, 1 if tok == '?' else 0
+    if re.match(r'(wd|WD|D[ABOQZC])', tok):
+        return 'white dwarf', 12000, 0.6, 0.012, 4
+    code, lc = spec_code(tok), lum_class(tok)
+    absmag = mag + 5 + 5 * math.log10(plx) if mag is not None and plx else None
+    if code is None:  # magnitude only, assume a main-sequence star
+        if absmag is None:
+            return '', 3600, 0.4, 0.45, 3
+        return '', round(ms_by(0, absmag, 1)), sig(ms_by(0, absmag, 2), 2), sig(ms_by(0, absmag, 3), 2), 2
+    t = round(teff_from_spec(code))
+    label = re.match(r'[^,]*', tok).group().rstrip(':')
+    supergiant = lc in ('Ia', 'Iab', 'Ib', 'I')
+    if absmag is not None:
+        l = lum_bol(absmag, t)
+        m = l ** (1 / 3.5)  # mass-luminosity relation; giants follow it poorly, so cap them
+        if lc in ('III', 'II'):
+            m = min(m, 4.0)
+        return label, t, sig(m, 2), sig(radius(l, t), 2), 0
+    if supergiant:
+        return label, t, 12.0, 100.0, 2
+    if lc in ('III', 'II'):
+        return label, t, 2.5, 10.0, 2
+    return label, t, sig(ms_by(1, t, 2), 2), sig(ms_by(1, t, 3), 2), 2
+
+
+def leaf_lum(leaf):
+    return leaf[4] ** 2 * (leaf[2] / 5772) ** 4
+
+
+def build_tree(node, plx):
+    """Resolve physics bottom-up and put the brighter side first, so the star you see is the primary.
+    Returns (compact tree, total mass, total luminosity)."""
+    if 'leaf' in node:
+        label, t, m, r, f = leaf_physics(node['leaf'], node['mag'], plx)
+        leaf = ['L', label, t, m, r, f]
+        return leaf, m, (leaf_lum(leaf) if t else None)
+    (a, ma, la), (b, mb, lb) = (build_tree(x, plx) for x in node['pair'])
+    for x, other, m_other in ((a, b, mb), (b, a, ma)):
+        if x[0] == 'L' and x[1] in ('?', 'sim'):
+            if x[1] == 'sim' and other[0] == 'L':
+                x[1:6] = [other[1], other[2], other[3], other[4], 2]
+            elif x[1] == 'sim':
+                x[1:6] = ['', 6000, 1.0, 1.0, 3]
+            else:  # seen only in the spectrum: fainter, so lighter than its partner
+                x[1:6] = ['?', 3600, sig((m_other or 1) * 0.35, 2), 0.5, 1]
+    ma, la = (a[3], leaf_lum(a)) if a[0] == 'L' else (ma, la)
+    mb, lb = (b[3], leaf_lum(b)) if b[0] == 'L' else (mb, lb)
+    if lb > la:
+        a, b, ma, mb, la, lb = b, a, mb, ma, lb, la
+    period, sep, e = orbit_values(node['orbit'])
+    flags, ax = 0, None
+    if period:
+        ax = ((ma + mb) * (period / 365.25) ** 2) ** (1 / 3)  # Kepler's third law
+    elif sep and plx:
+        ax, flags = sep / plx, 1
+    else:
+        flags = 2
+    return ['N', a, b, sig(period, 5), sig(ax, 4), e, flags], ma + mb, la + lb
+
+
+def load_multiplicity():
+    """HIP number -> (number of stars, configuration string).
+
+    Systems are filed under one system number (mHR): Acrux is 4731 although HYG lists alpha-1 Cru as
+    HR 4730, so match through the catalogue's own HIP cross-index rather than HR."""
+    def rows(name):
+        for line in open(fetch(name), encoding='utf8'):
+            parts = line.rstrip('\n').split('\t')
+            if not line.startswith('#') and parts[0].strip().isdigit():
+                yield parts
+    systems = {int(p[0]): (int(p[1]), p[3].strip()) for p in rows('multiplicity.tsv')
+               if len(p) > 3 and p[1].strip().isdigit()}
+    return {int(p[1]): systems[int(p[0])] for p in rows('multiplicity_xref.tsv')
+            if len(p) > 1 and p[1].strip().isdigit() and int(p[0]) in systems}
+
+
 # Build
 
 def main():
@@ -350,6 +528,38 @@ def main():
     sys_con = bounds.lookup(np.array([s['ra'] for s in systems]), np.array([s['dec'] for s in systems]))
 
     # Stars
+    # Multiplicity: HYG groups resolved companions under one comp_primary; a '+' (composite spectrum) or
+    # 'SB' (spectroscopic binary) in the spectral type means unresolved companions. This gives a lower
+    # bound only (Shaula's spectrum says 2+, it is really 3).
+    group_size = defaultdict(int)
+    for r in hyg:
+        if r['comp_primary']:
+            group_size[r['comp_primary']] += 1
+
+    def multiplicity(r):
+        n = group_size.get(r['comp_primary'], 1) if r['comp_primary'] else 1
+        if '+' in r['spect'] or 'SB' in r['spect']:
+            n = max(n, 2)
+        return n
+
+    mult_cat = load_multiplicity()
+    parsed = [0, 0]
+
+    def star_multiplicity(r, plx, snum):
+        """(number of stars, configuration tree or 0). The bright-star catalogue wins where it has the star."""
+        hr = int(r['hr']) if r['hr'] else 0
+        hip = int(r['hip']) if r['hip'] else 0
+        if hip in mult_cat:
+            n, conf = mult_cat[hip]
+            tree = 0
+            if n > 1:
+                node = parse_conf(conf)
+                parsed[0 if node else 1] += 1
+                if node and plx:
+                    tree = build_tree(node, plx)[0]
+            return max(n, snum), tree
+        return max(multiplicity(r), snum), 0
+
     stars, star_by_hip = [], {}
     for r in hyg:
         mag, dist = num(r['mag']), num(r['dist'])
@@ -382,7 +592,8 @@ def main():
         stars.append([hip, round(float(r['ra']) * 15, 4), round(float(r['dec']), 4), mag, rnd(ci, 2),
                       rnd(dist, 2) if known else None, r['spect'], names.get(hip) or r['proper'] or '',
                       greek, r['flam'] or '', con_index[con], int(r['hd']) if r['hd'] else 0,
-                      int(r['hr']) if r['hr'] else 0, round(t), sig(l, 3), sig(rad, 3), sys_i])
+                      int(r['hr']) if r['hr'] else 0, round(t), sig(l, 3), sig(rad, 3), sys_i,
+                      *star_multiplicity(r, known and 1 / dist, systems[sys_i]['snum'] if sys_i >= 0 else 1)])
     for s in systems:
         s['star'] = star_by_hip.get(s['hip'], -1) if s['hip'] and host_by_hip.get(s['hip']) is not None else -1
     for i, s in enumerate(systems):
@@ -436,6 +647,8 @@ def main():
     print(f'stars {len(stars)}  systems {len(systems)}  planets {sum(len(s["planets"]) for s in systems)}'
           f'  boundary agreement with HYG {agree:.4%}  size {len(js) / 1e6:.2f} MB')
     assert agree > 0.995, 'boundary lookup disagrees with HYG constellation labels'
+    print(f'multiple-star configurations parsed {parsed[0]}, unparsed {parsed[1]}')
+    assert parsed[0] > 10 * parsed[1], 'multiplicity parser is failing too often'
 
 
 def self_test():
@@ -446,6 +659,19 @@ def self_test():
     assert abs(lum_bol(4.83, 5772) - 1) < 0.08
     assert abs(teff_from_bv(0.65) - 5778) < 30
     assert abs(teff('B1.5IV+...', -0.23) - 23300) < 1
+    # Shaula: an unseen companion on 5.95 d, that pair and a B2 star on 1053 d
+    t, m, _ = build_tree(parse_conf('((B1.5IV + ?; 5.953d  e=.26) + B2IV; 1053d, e=.12)'), 1 / 175)
+    assert t[0] == 'N' and t[3] == 1053 and t[5] == 0.12 and t[1][0] == 'N' and t[1][2][1] == '?' and t[2][1] == 'B2IV'
+    assert 4 < t[4] < 9 and 0.08 < t[1][4] < 0.3, (t[4], t[1][4])  # AU, from Kepler's third law
+    # Capella: two pairs, the wide one given as an angular separation
+    t, *_ = build_tree(parse_conf('((G8III + G0III; 104.0d) + (10.0M1V + 13.7M5V; 3.2"); 723")'), 1 / 13.1)
+    assert t[6] == 1 and 9000 < t[4] < 10000 and t[2][1][1] == 'M1V' and t[2][6] == 1
+    # magnitude-prefixed nested pair, "sim", and the heavier side moved first
+    t, *_ = build_tree(parse_conf('(5.19K2III + 6.49(A9Vm + sim; 7.337d  e=0.21); 20.160")'), 1 / 50)
+    assert t[1][1] == 'K2III' and t[2][0] == 'N' and t[2][2][1] == 'A9Vm'  # the giant outshines the pair
+    t, *_ = build_tree(parse_conf('(8.5WDA2 + A1Vm; 50.09y  e=.59)'), 1 / 2.64)  # Sirius
+    assert t[1][1] == 'A1Vm' and t[2][5] == 4 and 15 < t[4] < 25
+    assert parse_conf('G2V + planets') is None and parse_conf('((A + B; 1d)') is None
     assert abs(radius_from_mass(1) - 1) < 1e-9 and 10 < radius_from_mass(318) < 15
 
 
