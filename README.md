@@ -11,7 +11,6 @@ An interactive 3D sky in the browser. It shows all 88 constellations and every n
 - Planetary systems use real orbital elements where they're known
 - Multiple-star systems come from Eggleton & Tokovinin (2008), with measured binary orbits from ORB6 and SB9
 - The Solar System's positions come from JPL Horizons, as of the date the data was built
-- Optional simulated planets for stars with no confirmed ones (they're clearly labelled as simulated)
 - Search for a constellation (*Orion*), a star (*Betelgeuse*, *HIP 27989*), a planet host (*TRAPPIST-1*), or a planet (*Kepler-22 b*)
 - Settings for each sky layer, orbit speed, auto-rotate, and the background
 

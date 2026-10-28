@@ -487,7 +487,6 @@
     </div>
     <div class="s-section tight">
       <div class="s-lbl">Systems</div>
-      <div class="s-row" title="For stars with no confirmed planets, show a clearly labelled simulated system"><span class="s-lbl" style="margin:0">Simulated planets</span><label class="tog"><input type="checkbox" data-set="sim"><div class="tog-track"></div><div class="tog-thumb"></div></label></div>
       <div class="s-lbl" style="margin-top:12px">Orbit Speed</div>
       <input type="range" class="s-range" data-set="orbit" min="1" max="51">
     </div>
@@ -1091,11 +1090,11 @@ function makeScale(as, rs) {
   }
 }
 
-// System model: confirmed planets, the Solar System, or a labelled simulation
+// System model: confirmed planets (plus the hand-added candidates) or the Solar System. Nothing is simulated.
 function systemModel(ref) {
   if (ref.type === 'sol') {
     return {
-      ref, key: 'sol', title: 'Solar System', sub: 'Sun · G2V', simulated: false, sol: true,
+      ref, key: 'sol', title: 'Solar System', sub: 'Sun · G2V', sol: true,
       star: { name: 'Sun', teff: 5772, rad: 1, lum: 1, mass: 1, spect: 'G2V', est: false },
       dist: 0, con: null,
       planets: SOL.planets.map((p, i) => ({ ...p, short: p.name, kind: planetKind(p), sol: true, flags: 0, seed: i + 1 })),
@@ -1112,7 +1111,7 @@ function systemModel(ref) {
     ref, key: st ? `hip/${st.hip}` : `host/${sy.host}`, title,
     sub: st ? desig(st) : (sy.spect || 'Planet host'),
     star: { name: title, teff, rad: rad ?? 1, lum, mass, spect: sy?.spect || (st && starSpect(st)) || '', est: !sy, radKnown: rad != null, massKnown: sy?.mass != null },
-    dist: sy?.dist ?? st?.dist ?? null, con: sy ? sy.con : st.con, sys: sy, st, simulated: false, planets: [],
+    dist: sy?.dist ?? st?.dist ?? null, con: sy ? sy.con : st.con, sys: sy, st, planets: [],
     mult: Math.max(st?.mult ?? 1, sy?.snum ?? 1), tree: st?.tree ?? null,
   }
   if (sy) {
@@ -1121,38 +1120,8 @@ function systemModel(ref) {
       const short = p.name.startsWith(host + ' ') ? p.name.slice(host.length + 1) : prettyName(p.name)
       return { ...p, name: prettyName(p.name), short, kind: planetKind(p), seed: i + 1 }
     })
-  } else if (settings.sim && model.mult === 1) { // companions would destabilise most invented orbits
-    model.simulated = true
-    model.planets = simulatePlanets(st, lum, mass, rad ?? 1)
   }
   return model
-}
-
-function simulatePlanets(st, L, M, Rsun) {
-  const rng = mulberry32(Math.imul(st.hip || st.i + 1, 2654435761))
-  const n = 2 + Math.floor(rng() * 6)
-  const frost = 2.7 * Math.sqrt(L)
-  let a = Math.max(0.035 * Math.sqrt(L), 4 * Rsun * AU_PER_RSUN) * (1.1 + rng() * 1.6)
-  const out = []
-  for (let i = 0; i < n; i++) {
-    let r, m
-    const x = rng()
-    if (a > frost) {
-      if (x < 0.55) { r = 8 + rng() * 4.5; m = 40 + Math.pow(rng(), 2) * 1500 }
-      else          { r = 3.2 + rng() * 1.2; m = Math.pow(r / 0.808, 1 / 0.589) }
-    } else if (x < 0.45) { r = 0.5 + rng() * 0.75; m = Math.pow(r, 1 / 0.279) }
-    else if (x < 0.85)   { r = 1.25 + rng() * 0.75; m = Math.pow(r / 0.808, 1 / 0.589) }
-    else                 { r = 2 + rng() * 1.6;     m = Math.pow(r / 0.808, 1 / 0.589) }
-    const letter = 'bcdefghij'[i]
-    const p = {
-      name: `${starTitle(st)} ${letter}`, short: letter, a, per: 365.25 * Math.sqrt(a ** 3 / M),
-      e: Math.pow(rng(), 3) * 0.2, r, m, teq: 278.6 * Math.pow(L, 0.25) / Math.sqrt(a), sim: true, flags: 0, seed: i + 1,
-    }
-    p.kind = planetKind(p)
-    out.push(p)
-    a *= 1.45 + rng() * 0.9
-  }
-  return out
 }
 
 let sys = null // the live system (see buildSystem)
@@ -1460,7 +1429,7 @@ function buildSystem(model) {
     obj.position.copy(dir).multiplyScalar(span * 1.05)
     sysGroup.add(obj)
     objects.push(obj)
-    earth = { obj, el: makeLabel('→ to Earth'), shown: null, pr: 0.05, dir }
+    earth = { obj, el: makeLabel(model.dist != null ? `→ to Earth · ${fmtLy(model.dist)}` : '→ to Earth'), shown: null, pr: 0.05, dir }
   }
 
   sys = {
@@ -1685,7 +1654,7 @@ function updateSelRing() {
 }
 
 // Settings (persisted per browser)
-const DEFAULTS = { lines: true, bounds: true, labels: true, milky: true, hosts: true, grid: false, sim: true, dots: true, rotate: false, speed: 26, orbit: 26, bg: '#07070f' }
+const DEFAULTS = { lines: true, bounds: true, labels: true, milky: true, hosts: true, grid: false, dots: true, rotate: false, speed: 26, orbit: 26, bg: '#07070f' }
 const settings = { ...DEFAULTS }
 try { Object.assign(settings, JSON.parse((localStorage.getItem('antares.settings') ?? localStorage.getItem('shaula.settings')) || '{}')) } catch {}
 function saveSettings() { try { localStorage.setItem('antares.settings', JSON.stringify(settings)) } catch {} }
@@ -2001,7 +1970,7 @@ function showStarPanel(s) {
   const multi = s.mult > 1
   const note = n ? `${confWord(sy.planets)}${multi ? `<br>${multWord(s.mult).toLowerCase()}` : ''}`
     : multi ? `No confirmed planets.<br>Shows the ${s.tree ? treeLeaves(s.tree).length : s.mult} stars.`
-    : (settings.sim ? 'No confirmed planets.<br>Shows a simulated system.' : 'No confirmed planets.<br>Shows the star alone.')
+    : 'No confirmed planets.<br>Shows the star alone.'
   const L = sy?.lum ?? s.lum
   showPanel([
     enterAction('ENTER SYSTEM →', note),
@@ -2057,15 +2026,13 @@ function showSystemPanel() {
   const hexc = cssColor(starTint(st.teff))
   const sym = m.sol ? '☉' : m.st ? (m.st.greek || m.st.flam || '★') : '◎'
   const multi = m.mult > 1
-  setHeader(sym, hexc, m.title, m.planets.length ? `${m.simulated ? 'Simulated' : 'Planetary'} system · ${planetsWord(m.planets.length)}`
+  setHeader(sym, hexc, m.title, m.planets.length ? `Planetary system · ${planetsWord(m.planets.length)}`
     : multi ? `${multWord(m.mult)} · no known planets` : 'No known planets')
   const ordered = sys.planets.filter(l => !l.comp).map(l => l.p)
   const [h1, h2] = sys.hz
   const inHZ = sys.planets.filter(l => l.inHZ).map(l => l.p.short ?? l.p.name)
-  const note = m.simulated
-    ? '<div class="ap-note">Simulated system. This star has no confirmed planets; these orbits are generated from its estimated luminosity and mass, for illustration only.</div>'
-    : (!m.planets.length && multi) ? `<div class="ap-note">${multWord(m.mult)} with no confirmed planets. No planets are simulated here: companion stars this close would make most orbits unstable.${m.tree ? '' : ' The catalogue gives no orbits for the companions, so only the primary is drawn.'}</div>`
-    : (!m.planets.length ? '<div class="ap-note">No confirmed planets. Turn on Simulated planets in Settings to imagine one.</div>' : '')
+  const note = (!m.planets.length && multi) ? `<div class="ap-note">${multWord(m.mult)} with no confirmed planets.${m.tree ? '' : ' The catalogue gives no orbits for the companions, so only the primary is drawn.'}</div>`
+    : (!m.planets.length ? '<div class="ap-note">No confirmed planets, so only the star is shown.</div>' : '')
   showPanel([
     note,
     colSection('Star',
@@ -2080,7 +2047,7 @@ function showSystemPanel() {
       (multi ? `<div class="ap-foot">Mass and radius are the primary's; luminosity blends the light of all ${m.mult} stars</div>` : ''), true),
     colSection('Simulation', simulationRows(), true),
     multi && m.st ? colSection(`Stars · ${m.mult}`, starRows(m.st, 'p:'), true) : '',
-    ordered.length ? colSection(`${m.simulated ? 'Simulated planets' : 'Planets'} · ${ordered.length}`, planetRows(ordered, 'p:'), true) : '',
+    ordered.length ? colSection(`Planets · ${ordered.length}`, planetRows(ordered, 'p:'), true) : '',
     colSection('Habitable Zone',
       kv('Inner edge', `${fmtSig(h1, 3)} AU`) +
       kv('Outer edge', `${fmtSig(h2, 3)} AU`) +
@@ -2129,32 +2096,31 @@ function showPlanetPanel(l) {
   const p = l.p
   const k = KIND[p.kind]
   const sym = p.sol ? { Mercury:'☿', Venus:'♀', Earth:'⊕', Mars:'♂', Jupiter:'♃', Saturn:'♄', Uranus:'⛢', Neptune:'♆' }[p.name] : (p.short && p.short.length <= 3 ? p.short : '●')
-  setHeader(sym, k.css, p.name, `${k.label} · ${p.sim ? 'Simulated' : p.sol ? 'Solar System' : p.unconf ? 'Unconfirmed' : 'Confirmed'}`)
+  setHeader(sym, k.css, p.name, `${k.label} · ${p.sol ? 'Solar System' : p.unconf ? 'Unconfirmed' : 'Confirmed'}`)
   const f = p.flags || 0
   const teqLbl = p.sol ? 'Mean temperature' : 'Equilibrium temp'
   const mLbl = p.msini ? 'Min. mass (M sin i)' : 'Mass'
-  const tC = p.teq != null ? `${est(f & 8 || p.sim)}${fmtN(p.teq)} K · ${fmtN(p.teq - 273.15)} °C` : '—'
+  const tC = p.teq != null ? `${est(f & 8)}${fmtN(p.teq)} K · ${fmtN(p.teq - 273.15)} °C` : '—'
   showPanel([
-    p.sim ? '<div class="ap-note">Simulated planet, not a real detection.</div>' : '',
     p.unconf ? '<div class="ap-note">Unconfirmed. A proposed radial-velocity signal that is not in the NASA Exoplanet Archive confirmed list, shown because Project Hail Mary uses it. It may not exist.</div>' : '',
     colSection('Orbit',
-      kv('Semi-major axis', `${est(f & 1 || p.sim)}${fmtSig(p.a, 3)} AU`) +
-      kv('Period', `${est(f & 2 || p.sim)}${fmtPeriod(p.per)}`) +
+      kv('Semi-major axis', `${est(f & 1)}${fmtSig(p.a, 3)} AU`) +
+      kv('Period', `${est(f & 2)}${fmtPeriod(p.per)}`) +
       kv('Eccentricity', p.e != null ? fmtSig(p.e, 2) : '—') +
       kv('Habitable zone', l.inHZ ? 'inside' : p.a < sys.hz[0] ? 'too hot (inside)' : 'too cold (outside)', l.inHZ ? 'green' : 'zero') +
       (p.sol ? kv('Position today', 'JPL Horizons', 'green') : kv('Position today', l.phase === 'transit' ? 'from transit timing' : l.phase === 'periastron' ? 'from periastron time' : 'unknown, illustrative', l.phase ? 'green' : 'zero')) +
       (p.sol ? '' : kv('Inclination', p.incl != null ? `${fmtSig(p.incl, 3)}°` : 'unknown')), true),
     colSection('Physical',
-      kv('Radius', p.r != null ? `${est(f & 4 || p.sim)}${fmtSig(p.r, 3)} R⊕` : 'unknown') +
-      kv(mLbl, p.m != null ? `${est(p.sim)}${fmtSig(p.m, 3)} M⊕` : 'unknown') +
+      kv('Radius', p.r != null ? `${est(f & 4)}${fmtSig(p.r, 3)} R⊕` : 'unknown') +
+      kv(mLbl, p.m != null ? `${fmtSig(p.m, 3)} M⊕` : 'unknown') +
       (p.m != null && p.m > 30 ? kv('', `${fmtSig(p.m / 317.83, 3)} M♃`) : '') +
       kv(teqLbl, tC) +
       (p.insol != null ? kv('Insolation', `${fmtSig(p.insol, 3)} × Earth`) : ''), true),
-    p.sim || p.sol ? '' : colSection('Discovery',
+    p.sol ? '' : colSection('Discovery',
       kv('Year', p.year ?? '—') +
       kv('Method', esc(p.method ?? '—')) +
       kv('Facility', esc(p.facility ?? '—')), true),
-    (f && !p.sim) ? '<div class="ap-col"><div class="ap-col-body" style="display:block;padding-top:6px"><div class="ap-foot">~ estimated: missing values derived from period, stellar mass or a mass-radius relation</div></div></div>' : '',
+    f ? '<div class="ap-col"><div class="ap-col-body" style="display:block;padding-top:6px"><div class="ap-foot">~ estimated: missing values derived from period, stellar mass or a mass-radius relation</div></div></div>' : '',
   ].join(''))
 }
 
@@ -2248,7 +2214,7 @@ function updateDrawer() {
     _hud = ''
     updateHud()
     const p = selPlanet?.prim ? null : selPlanet?.p
-    const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : m.simulated ? `<span class="bd-badge polar">Simulated</span>` : (p ? p.unconf : m.planets.length && m.planets.every(p => p.unconf)) ? `<span class="bd-badge polar">Unconfirmed</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
+    const badge = (m.sol ? `<span class="bd-badge accent">Home</span>` : (p ? p.unconf : m.planets.length && m.planets.every(p => p.unconf)) ? `<span class="bd-badge polar">Unconfirmed</span>` : m.planets.length ? `<span class="bd-badge nonpolar">Confirmed</span>` : `<span class="bd-badge polar">No known planets</span>`) + (m.mult > 1 ? `<span class="bd-badge ionic">${multWord(m.mult)}</span>` : "")
     if (p) {
       chem.innerHTML = badge + chemItem('Planet', esc(p.name)) + chemItem('Type', KIND[p.kind].label) +
         chemItem('Orbit', `${fmtSig(p.a, 3)} AU`) + chemItem('Period', fmtPeriod(p.per)) + (selPlanet.inHZ ? '<span class="bd-badge nonpolar">Habitable zone</span>' : '')
@@ -2711,7 +2677,6 @@ window.addEventListener('resize', () => {
       if (key === 'rotate' && !input.checked) clearTimeout(_rotateResumeTimer)
       applySettings()
       saveSettings()
-      if (key === 'sim' && mode === 'sky' && sel?.type === 'star') showStarPanel(sel.star)
       if (key === 'orbit') updateHud()
     })
   })
