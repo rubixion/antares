@@ -1,6 +1,6 @@
-# Shaula
+# Antares
 
-**Live:** https://rubixion.github.io/shaula/
+**Live:** https://rubixion.github.io/antares/
 
 An interactive 3D sky in the browser. It shows all 88 constellations and every naked-eye star. Click a star to fly into its planetary system, which is built from every confirmed exoplanet in the NASA Exoplanet Archive.
 

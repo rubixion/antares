@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Constellations</title>
+  <title>Antares</title>
   <meta name="description" content="Explore all 88 constellations in 3D. Click any star to fly into its planetary system, built from every confirmed exoplanet in the NASA Exoplanet Archive.">
   <style>
     :root {
@@ -412,7 +412,7 @@
 <div id="app">
 
   <div id="header">
-    <span id="title">Constellations</span>
+    <span id="title">Antares</span>
     <button id="back-btn" class="btn" title="Back to the sky (Esc)">← SKY</button>
     <div id="search-row">
       <input id="search-input" type="text" list="search-list" placeholder="Try Orion, Sirius, TRAPPIST-1, Earth" autocomplete="off" spellcheck="false" aria-label="Search constellations, stars and planets">
@@ -1687,8 +1687,8 @@ function updateSelRing() {
 // Settings (persisted per browser)
 const DEFAULTS = { lines: true, bounds: true, labels: true, milky: true, hosts: true, grid: false, sim: true, dots: true, rotate: false, speed: 26, orbit: 26, bg: '#07070f' }
 const settings = { ...DEFAULTS }
-try { Object.assign(settings, JSON.parse(localStorage.getItem('shaula.settings') || '{}')) } catch {}
-function saveSettings() { try { localStorage.setItem('shaula.settings', JSON.stringify(settings)) } catch {} }
+try { Object.assign(settings, JSON.parse((localStorage.getItem('antares.settings') ?? localStorage.getItem('shaula.settings')) || '{}')) } catch {}
+function saveSettings() { try { localStorage.setItem('antares.settings', JSON.stringify(settings)) } catch {} }
 
 function applySettings() {
   figureGroup.visible = settings.lines && mode === 'sky'
